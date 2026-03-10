@@ -1,3 +1,20 @@
 ThisWeek_TODO.md
 SmartRest_Agent_TODO.md
 codex_prompt.md
+
+# Local environment
+.venv/
+.env
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+
+# Tool caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.pre-commit-cache/
+
+# IDE metadata
+.idea/
