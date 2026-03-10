@@ -284,7 +284,7 @@ It should carry the key facts of the run:
 - what tool outputs were produced
 - what final answer was returned
 
-If the state is well designed, the whole workflow becomes understandable.
+If the state is well-designed, the whole workflow becomes understandable.
 
 ---
 
