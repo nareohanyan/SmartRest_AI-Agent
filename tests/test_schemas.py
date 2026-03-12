@@ -1,0 +1,305 @@
+"""Contract tests for typed schema boundaries."""
+
+from __future__ import annotations
+
+from datetime import date
+
+import pytest
+from pydantic import ValidationError
+
+from app.schemas.agent import AgentState, IntentType, RunStatus
+from app.schemas.reports import (
+    ReportDefinition,
+    ReportFilterKey,
+    ReportFilters,
+    ReportRequest,
+    ReportResult,
+    ReportType,
+)
+from app.schemas.tools import (
+    AccessStatus,
+    GetReportDefinitionRequest,
+    GetReportDefinitionResponse,
+    ListReportsRequest,
+    ListReportsResponse,
+    ResolveScopeRequest,
+    ResolveScopeResponse,
+    RunReportRequest,
+    RunReportResponse,
+)
+
+
+def _scope_response_payload() -> dict[str, object]:
+    return {
+        "status": "granted",
+        "scope_id": "scope-01",
+        "allowed_report_ids": ["sales_total", "order_count", "average_check"],
+    }
+
+
+def _filters_payload() -> dict[str, str]:
+    return {"date_from": "2026-03-01", "date_to": "2026-03-07"}
+
+
+def _report_definition_payload() -> dict[str, object]:
+    return {
+        "report_id": "sales_total",
+        "title": "Total Sales",
+        "description": "Total sales in selected date range.",
+        "required_filters": ["date_from", "date_to"],
+        "optional_filters": ["source"],
+    }
+
+
+def _report_result_payload() -> dict[str, object]:
+    return {
+        "report_id": "sales_total",
+        "filters": _filters_payload(),
+        "metrics": [{"label": "sales_total", "value": 12345.67}],
+    }
+
+
+def _agent_state_payload() -> dict[str, object]:
+    return {
+        "thread_id": "thread-01",
+        "run_id": "run-01",
+        "user_question": "What were sales last week?",
+        "user_scope": _scope_response_payload(),
+        "intent": "get_kpi",
+        "selected_report_id": "sales_total",
+        "filters": _filters_payload(),
+        "needs_clarification": False,
+        "clarification_question": None,
+        "tool_responses": {
+            "resolve_scope": _scope_response_payload(),
+            "run_report": {"result": _report_result_payload(), "warnings": []},
+        },
+        "warnings": [],
+        "final_answer": "Sales were 12,345.67 in the selected period.",
+        "status": "completed",
+    }
+
+
+def test_agent_state_valid_payload() -> None:
+    state = AgentState.model_validate(_agent_state_payload())
+
+    assert state.intent is IntentType.GET_KPI
+    assert state.status is RunStatus.COMPLETED
+    assert state.selected_report_id is ReportType.SALES_TOTAL
+    assert state.filters is not None
+    assert state.filters.date_from == date(2026, 3, 1)
+
+
+def test_agent_state_missing_required_field_fails() -> None:
+    payload = _agent_state_payload()
+    payload.pop("run_id")
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentState.model_validate(payload)
+
+    assert any(
+        error["loc"] == ("run_id",) and error["type"] == "missing"
+        for error in exc_info.value.errors()
+    )
+
+
+def test_agent_state_wrong_type_fails() -> None:
+    payload = _agent_state_payload()
+    payload["warnings"] = "none"
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentState.model_validate(payload)
+
+    assert any(error["loc"] == ("warnings",) for error in exc_info.value.errors())
+
+
+def test_agent_state_invalid_enum_value_fails() -> None:
+    payload = _agent_state_payload()
+    payload["intent"] = "unknown_intent"
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentState.model_validate(payload)
+
+    assert any(
+        error["loc"] == ("intent",) and error["type"] == "enum"
+        for error in exc_info.value.errors()
+    )
+
+
+def test_agent_state_extra_field_fails() -> None:
+    payload = _agent_state_payload()
+    payload["unexpected_field"] = "future-value"
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentState.model_validate(payload)
+
+    assert any(
+        error["loc"] == ("unexpected_field",) and error["type"] == "extra_forbidden"
+        for error in exc_info.value.errors()
+    )
+
+
+def test_report_contracts_valid_payloads() -> None:
+    report_filters = ReportFilters.model_validate(_filters_payload())
+    report_request = ReportRequest.model_validate(
+        {"report_id": "sales_total", "filters": _filters_payload()}
+    )
+    report_definition = ReportDefinition.model_validate(_report_definition_payload())
+    report_result = ReportResult.model_validate(_report_result_payload())
+
+    assert report_filters.date_to == date(2026, 3, 7)
+    assert report_request.report_id is ReportType.SALES_TOTAL
+    assert report_definition.required_filters == (
+        ReportFilterKey.DATE_FROM,
+        ReportFilterKey.DATE_TO,
+    )
+    assert report_result.metrics[0].label == "sales_total"
+
+
+def test_report_contract_invalid_report_id_fails() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        ReportRequest.model_validate(
+            {"report_id": "gross_profit", "filters": _filters_payload()}
+        )
+
+    assert any(
+        error["loc"] == ("report_id",) and error["type"] == "enum"
+        for error in exc_info.value.errors()
+    )
+
+
+def test_report_contract_invalid_or_missing_dates_fail() -> None:
+    with pytest.raises(ValidationError) as missing_date_exc:
+        ReportFilters.model_validate({"date_from": "2026-03-01"})
+
+    assert any(
+        error["loc"] == ("date_to",) and error["type"] == "missing"
+        for error in missing_date_exc.value.errors()
+    )
+
+    with pytest.raises(ValidationError) as invalid_range_exc:
+        ReportFilters.model_validate({"date_from": "2026-03-08", "date_to": "2026-03-01"})
+
+    assert "date_from must be on or before date_to" in str(invalid_range_exc.value)
+
+
+def test_resolve_scope_contracts_valid_and_invalid() -> None:
+    scope_request = ResolveScopeRequest.model_validate({"user_id": "u1", "org_id": "o1"})
+    scope_response = ResolveScopeResponse.model_validate(_scope_response_payload())
+
+    assert scope_request.user_id == "u1"
+    assert scope_response.status is AccessStatus.GRANTED
+
+    with pytest.raises(ValidationError) as missing_field_exc:
+        ResolveScopeRequest.model_validate({"user_id": "u1"})
+
+    assert any(
+        error["loc"] == ("org_id",) and error["type"] == "missing"
+        for error in missing_field_exc.value.errors()
+    )
+
+    with pytest.raises(ValidationError) as denied_reason_exc:
+        ResolveScopeResponse.model_validate(
+            {
+                "status": "denied",
+                "scope_id": "scope-02",
+                "allowed_report_ids": [],
+            }
+        )
+
+    assert "denial_reason is required when status is denied" in str(denied_reason_exc.value)
+
+
+def test_list_reports_contracts_valid_and_invalid() -> None:
+    list_request = ListReportsRequest.model_validate(
+        {"scope_id": "scope-01", "allowed_report_ids": ["sales_total"]}
+    )
+    list_response = ListReportsResponse.model_validate({"reports": [_report_definition_payload()]})
+
+    assert list_request.allowed_report_ids == [ReportType.SALES_TOTAL]
+    assert list_response.reports[0].report_id is ReportType.SALES_TOTAL
+
+    with pytest.raises(ValidationError) as missing_field_exc:
+        ListReportsRequest.model_validate({"scope_id": "scope-01"})
+
+    assert any(
+        error["loc"] == ("allowed_report_ids",) and error["type"] == "missing"
+        for error in missing_field_exc.value.errors()
+    )
+
+
+def test_get_report_definition_contracts_valid_and_invalid() -> None:
+    definition_request = GetReportDefinitionRequest.model_validate({"report_id": "sales_total"})
+    definition_response = GetReportDefinitionResponse.model_validate(
+        {"definition": _report_definition_payload()}
+    )
+
+    assert definition_request.report_id is ReportType.SALES_TOTAL
+    assert definition_response.definition.report_id is ReportType.SALES_TOTAL
+
+    with pytest.raises(ValidationError) as invalid_id_exc:
+        GetReportDefinitionRequest.model_validate({"report_id": "menu_mix"})
+
+    assert any(
+        error["loc"] == ("report_id",) and error["type"] == "enum"
+        for error in invalid_id_exc.value.errors()
+    )
+
+
+def test_run_report_contracts_valid_and_invalid() -> None:
+    run_request = RunReportRequest.model_validate(
+        {
+            "scope_id": "scope-01",
+            "request": {"report_id": "sales_total", "filters": _filters_payload()},
+        }
+    )
+    run_response = RunReportResponse.model_validate(
+        {"result": _report_result_payload(), "warnings": ["mock-result"]}
+    )
+
+    assert run_request.request.report_id is ReportType.SALES_TOTAL
+    assert run_response.result.report_id is ReportType.SALES_TOTAL
+
+    with pytest.raises(ValidationError) as missing_request_exc:
+        RunReportRequest.model_validate({"scope_id": "scope-01"})
+
+    assert any(
+        error["loc"] == ("request",) and error["type"] == "missing"
+        for error in missing_request_exc.value.errors()
+    )
+
+    with pytest.raises(ValidationError) as empty_metrics_exc:
+        RunReportResponse.model_validate(
+            {
+                "result": {
+                    "report_id": "sales_total",
+                    "filters": _filters_payload(),
+                    "metrics": [],
+                }
+            }
+        )
+
+    assert any(error["loc"] == ("result", "metrics") for error in empty_metrics_exc.value.errors())
+
+
+def test_schema_evolution_rejects_unknown_nested_fields() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        RunReportRequest.model_validate(
+            {
+                "scope_id": "scope-01",
+                "request": {
+                    "report_id": "sales_total",
+                    "filters": {
+                        "date_from": "2026-03-01",
+                        "date_to": "2026-03-07",
+                        "timezone": "UTC",
+                    },
+                },
+            }
+        )
+
+    assert any(
+        error["loc"] == ("request", "filters", "timezone")
+        and error["type"] == "extra_forbidden"
+        for error in exc_info.value.errors()
+    )
