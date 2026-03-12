@@ -9,6 +9,8 @@ description = "SmartRest AI reporting agent foundation"
 requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.115.0,<1.0.0",
+  "langgraph==1.0.10",
+  "openai==2.26.0",
   "pydantic>=2.8.0,<3.0.0",
   "pydantic-settings>=2.4.0,<3.0.0",
   "uvicorn>=0.30.0,<1.0.0",
