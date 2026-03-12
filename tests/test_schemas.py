@@ -71,6 +71,7 @@ def _agent_state_payload() -> dict[str, object]:
         "thread_id": "thread-01",
         "run_id": "run-01",
         "user_question": "What were sales last week?",
+        "scope_request": _identity_payload(),
         "user_scope": _scope_response_payload(),
         "intent": "get_kpi",
         "selected_report_id": "sales_total",

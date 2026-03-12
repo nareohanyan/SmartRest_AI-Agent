@@ -8,14 +8,14 @@ repos:
     hooks:
       - id: mypy
         name: mypy
-        entry: python3 -m mypy app
+        entry: .venv/bin/python -m mypy app
         language: system
         pass_filenames: false
         types: [python]
 
       - id: pytest
         name: pytest
-        entry: python3 -m pytest
+        entry: .venv/bin/python -m pytest
         language: system
         pass_filenames: false
         types: [python]

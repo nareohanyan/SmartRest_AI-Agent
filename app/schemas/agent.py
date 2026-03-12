@@ -8,6 +8,7 @@ from app.schemas.reports import ReportFilters, ReportType
 from app.schemas.tools import (
     GetReportDefinitionResponse,
     ListReportsResponse,
+    ResolveScopeRequest,
     ResolveScopeResponse,
     RunReportResponse,
 )
@@ -44,6 +45,7 @@ class AgentState(_SchemaModel):
     thread_id: str = Field(min_length=1)
     run_id: str = Field(min_length=1)
     user_question: str = Field(min_length=1)
+    scope_request: ResolveScopeRequest | None = None
     user_scope: ResolveScopeResponse | None = None
     intent: IntentType | None = None
     selected_report_id: ReportType | None = None
