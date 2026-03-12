@@ -32,8 +32,15 @@ from app.schemas.tools import (
 def _scope_response_payload() -> dict[str, object]:
     return {
         "status": "granted",
-        "scope_id": "scope-01",
         "allowed_report_ids": ["sales_total", "order_count", "average_check"],
+    }
+
+
+def _identity_payload() -> dict[str, str]:
+    return {
+        "user_id": "u1",
+        "profile_id": "p1",
+        "profile_nick": "nick_1",
     }
 
 
@@ -184,17 +191,17 @@ def test_report_contract_invalid_or_missing_dates_fail() -> None:
 
 
 def test_resolve_scope_contracts_valid_and_invalid() -> None:
-    scope_request = ResolveScopeRequest.model_validate({"user_id": "u1", "org_id": "o1"})
+    scope_request = ResolveScopeRequest.model_validate(_identity_payload())
     scope_response = ResolveScopeResponse.model_validate(_scope_response_payload())
 
     assert scope_request.user_id == "u1"
     assert scope_response.status is AccessStatus.GRANTED
 
     with pytest.raises(ValidationError) as missing_field_exc:
-        ResolveScopeRequest.model_validate({"user_id": "u1"})
+        ResolveScopeRequest.model_validate({"user_id": "u1", "profile_nick": "nick_1"})
 
     assert any(
-        error["loc"] == ("org_id",) and error["type"] == "missing"
+        error["loc"] == ("profile_id",) and error["type"] == "missing"
         for error in missing_field_exc.value.errors()
     )
 
@@ -202,7 +209,6 @@ def test_resolve_scope_contracts_valid_and_invalid() -> None:
         ResolveScopeResponse.model_validate(
             {
                 "status": "denied",
-                "scope_id": "scope-02",
                 "allowed_report_ids": [],
             }
         )
@@ -212,7 +218,7 @@ def test_resolve_scope_contracts_valid_and_invalid() -> None:
 
 def test_list_reports_contracts_valid_and_invalid() -> None:
     list_request = ListReportsRequest.model_validate(
-        {"scope_id": "scope-01", "allowed_report_ids": ["sales_total"]}
+        {**_identity_payload(), "allowed_report_ids": ["sales_total"]}
     )
     list_response = ListReportsResponse.model_validate({"reports": [_report_definition_payload()]})
 
@@ -220,7 +226,7 @@ def test_list_reports_contracts_valid_and_invalid() -> None:
     assert list_response.reports[0].report_id is ReportType.SALES_TOTAL
 
     with pytest.raises(ValidationError) as missing_field_exc:
-        ListReportsRequest.model_validate({"scope_id": "scope-01"})
+        ListReportsRequest.model_validate(_identity_payload())
 
     assert any(
         error["loc"] == ("allowed_report_ids",) and error["type"] == "missing"
@@ -249,7 +255,7 @@ def test_get_report_definition_contracts_valid_and_invalid() -> None:
 def test_run_report_contracts_valid_and_invalid() -> None:
     run_request = RunReportRequest.model_validate(
         {
-            "scope_id": "scope-01",
+            **_identity_payload(),
             "request": {"report_id": "sales_total", "filters": _filters_payload()},
         }
     )
@@ -261,7 +267,7 @@ def test_run_report_contracts_valid_and_invalid() -> None:
     assert run_response.result.report_id is ReportType.SALES_TOTAL
 
     with pytest.raises(ValidationError) as missing_request_exc:
-        RunReportRequest.model_validate({"scope_id": "scope-01"})
+        RunReportRequest.model_validate(_identity_payload())
 
     assert any(
         error["loc"] == ("request",) and error["type"] == "missing"
@@ -286,7 +292,7 @@ def test_schema_evolution_rejects_unknown_nested_fields() -> None:
     with pytest.raises(ValidationError) as exc_info:
         RunReportRequest.model_validate(
             {
-                "scope_id": "scope-01",
+                **_identity_payload(),
                 "request": {
                     "report_id": "sales_total",
                     "filters": {

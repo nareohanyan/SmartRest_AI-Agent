@@ -18,13 +18,13 @@ class AccessStatus(str, Enum):
 
 class ResolveScopeRequest(_SchemaModel):
     user_id: str = Field(min_length=1)
-    org_id: str = Field(min_length=1)
+    profile_id: str = Field(min_length=1)
+    profile_nick: str = Field(min_length=1)
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class ResolveScopeResponse(_SchemaModel):
     status: AccessStatus
-    scope_id: str = Field(min_length=1)
     allowed_report_ids: list[ReportType]
     denial_reason: str | None = None
 
@@ -40,7 +40,9 @@ class ResolveScopeResponse(_SchemaModel):
 
 
 class ListReportsRequest(_SchemaModel):
-    scope_id: str = Field(min_length=1)
+    user_id: str = Field(min_length=1)
+    profile_id: str = Field(min_length=1)
+    profile_nick: str = Field(min_length=1)
     allowed_report_ids: list[ReportType]
 
 
@@ -57,7 +59,9 @@ class GetReportDefinitionResponse(_SchemaModel):
 
 
 class RunReportRequest(_SchemaModel):
-    scope_id: str = Field(min_length=1)
+    user_id: str = Field(min_length=1)
+    profile_id: str = Field(min_length=1)
+    profile_nick: str = Field(min_length=1)
     request: ReportRequest
 
 
