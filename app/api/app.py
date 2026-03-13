@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI
 
+from app.api.routes.agent import router as agent_router
 from app.core.config import get_settings
 
 
@@ -13,5 +14,7 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["system"])
     def health() -> dict[str, str]:
         return {"status": "ok", "environment": settings.app_env}
+
+    app.include_router(agent_router)
 
     return app
