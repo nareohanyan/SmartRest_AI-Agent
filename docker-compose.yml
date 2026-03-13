@@ -21,6 +21,7 @@ services:
       POSTGRES_PASSWORD: smartrest
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./sql/postgres/init:/docker-entrypoint-initdb.d:ro
     ports:
       - "127.0.0.1:5433:5432"
     healthcheck:
