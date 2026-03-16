@@ -1,12 +1,34 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi.testclient import TestClient
+import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 
 from app.api.app import create_app
 from app.api.schemas import AgentRunRequest
 from app.services.agent_runtime import AgentRuntimeExecutionError, get_agent_runtime_service
+
+pytestmark = pytest.mark.anyio
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
+@pytest.fixture
+def app() -> FastAPI:
+    return create_app()
+
+
+@pytest.fixture
+async def api_client(app: FastAPI) -> AsyncIterator[AsyncClient]:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        yield client
 
 
 def _request_payload(
@@ -26,9 +48,8 @@ def _request_payload(
     }
 
 
-def test_supported_request_returns_completed_contract() -> None:
-    client = TestClient(create_app())
-    response = client.post(
+async def test_supported_request_returns_completed_contract(api_client: AsyncClient) -> None:
+    response = await api_client.post(
         "/agent/run",
         json=_request_payload("What were total sales 2026-03-01 to 2026-03-07?"),
     )
@@ -47,9 +68,8 @@ def test_supported_request_returns_completed_contract() -> None:
     assert payload["clarification_question"] is None
 
 
-def test_missing_date_returns_clarify_response() -> None:
-    client = TestClient(create_app())
-    response = client.post("/agent/run", json=_request_payload("What were total sales?"))
+async def test_missing_date_returns_clarify_response(api_client: AsyncClient) -> None:
+    response = await api_client.post("/agent/run", json=_request_payload("What were total sales?"))
 
     assert response.status_code == 200
     payload = response.json()
@@ -59,9 +79,8 @@ def test_missing_date_returns_clarify_response() -> None:
     assert "date range" in payload["clarification_question"].lower()
 
 
-def test_unsupported_request_returns_rejected_status() -> None:
-    client = TestClient(create_app())
-    response = client.post(
+async def test_unsupported_request_returns_rejected_status(api_client: AsyncClient) -> None:
+    response = await api_client.post(
         "/agent/run",
         json=_request_payload("Show payroll tax trend 2026-03-01 to 2026-03-07."),
     )
@@ -73,9 +92,10 @@ def test_unsupported_request_returns_rejected_status() -> None:
     assert payload["selected_report_id"] is None
 
 
-def test_denied_scope_returns_denied_and_blocks_report_path() -> None:
-    client = TestClient(create_app())
-    response = client.post(
+async def test_denied_scope_returns_denied_and_blocks_report_path(
+    api_client: AsyncClient,
+) -> None:
+    response = await api_client.post(
         "/agent/run",
         json=_request_payload(
             "What were total sales 2026-03-01 to 2026-03-07?",
@@ -90,9 +110,8 @@ def test_denied_scope_returns_denied_and_blocks_report_path() -> None:
     assert payload["answer"] is not None
 
 
-def test_request_validation_error_returns_422() -> None:
-    client = TestClient(create_app())
-    response = client.post(
+async def test_request_validation_error_returns_422(api_client: AsyncClient) -> None:
+    response = await api_client.post(
         "/agent/run",
         json={
             "thread_id": "thread-api-1",
@@ -103,9 +122,10 @@ def test_request_validation_error_returns_422() -> None:
     assert response.status_code == 422
 
 
-def test_runtime_failure_returns_controlled_500() -> None:
-    app = create_app()
-
+async def test_runtime_failure_returns_controlled_500(
+    app: FastAPI,
+    api_client: AsyncClient,
+) -> None:
     class _FailingRuntime:
         def run(self, _request: AgentRunRequest) -> Any:
             raise AgentRuntimeExecutionError("boom")
@@ -114,9 +134,8 @@ def test_runtime_failure_returns_controlled_500() -> None:
         return _FailingRuntime()
 
     app.dependency_overrides[get_agent_runtime_service] = _override_dependency
-    client = TestClient(app)
 
-    response = client.post(
+    response = await api_client.post(
         "/agent/run",
         json=_request_payload("What were total sales 2026-03-01 to 2026-03-07?"),
     )
@@ -125,9 +144,8 @@ def test_runtime_failure_returns_controlled_500() -> None:
     assert response.json() == {"detail": "Agent runtime execution failed."}
 
 
-def test_health_endpoint_remains_available() -> None:
-    client = TestClient(create_app())
-    response = client.get("/health")
+async def test_health_endpoint_remains_available(api_client: AsyncClient) -> None:
+    response = await api_client.get("/health")
 
     assert response.status_code == 200
     payload = response.json()
