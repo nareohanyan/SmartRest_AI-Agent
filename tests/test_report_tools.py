@@ -1,4 +1,4 @@
-"""Deterministic tool behavior tests for Task 8."""
+"""Deterministic behavior tests for report tools."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from datetime import date, datetime, time, timezone
 
 import pytest
 
-from app.agent.tools import (
+from app.agent.report_tools import (
     get_report_definition_tool,
     list_reports_tool,
     resolve_scope_tool,
@@ -173,3 +173,4 @@ def test_run_report_source_filter_not_supported_for_sales_total_fails() -> None:
 
     with pytest.raises(ValueError, match="Source filter is not supported"):
         run_report_tool(request)
+

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 
+from app.schemas.base import SchemaModel
 from app.schemas.reports import ReportFilters, ReportType
 from app.schemas.tools import (
     GetReportDefinitionResponse,
@@ -12,10 +13,6 @@ from app.schemas.tools import (
     ResolveScopeResponse,
     RunReportResponse,
 )
-
-
-class _SchemaModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
 
 
 class IntentType(str, Enum):
@@ -34,14 +31,14 @@ class RunStatus(str, Enum):
     FAILED = "failed"
 
 
-class ToolResponses(_SchemaModel):
+class ToolResponses(SchemaModel):
     resolve_scope: ResolveScopeResponse | None = None
     list_reports: ListReportsResponse | None = None
     get_report_definition: GetReportDefinitionResponse | None = None
     run_report: RunReportResponse | None = None
 
 
-class AgentState(_SchemaModel):
+class AgentState(SchemaModel):
     thread_id: str = Field(min_length=1)
     run_id: str = Field(min_length=1)
     user_question: str = Field(min_length=1)

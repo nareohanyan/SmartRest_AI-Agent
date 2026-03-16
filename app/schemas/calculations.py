@@ -4,11 +4,9 @@ from decimal import Decimal
 from enum import Enum
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 
-
-class _SchemaModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+from app.schemas.base import SchemaModel
 
 
 class CalculationFormula(str, Enum):
@@ -35,7 +33,7 @@ class CalculationRoundingMode(str, Enum):
     UP = "up"
 
 
-class _CalculationSpecBase(_SchemaModel):
+class _CalculationSpecBase(SchemaModel):
     output_key: str = Field(min_length=1)
 
 
@@ -98,7 +96,7 @@ CalculationSpec: TypeAlias = Annotated[
 ]
 
 
-class ComputeMetricsRequest(_SchemaModel):
+class ComputeMetricsRequest(SchemaModel):
     base_metrics: dict[str, Decimal]
     calculations: list[CalculationSpec] = Field(min_length=1)
     precision: int = Field(default=2, ge=0, le=6)
@@ -117,7 +115,7 @@ class ComputeMetricsRequest(_SchemaModel):
         return self
 
 
-class DerivedMetric(_SchemaModel):
+class DerivedMetric(SchemaModel):
     key: str = Field(min_length=1)
     formula: CalculationFormula
     value: Decimal | None = None
@@ -125,7 +123,6 @@ class DerivedMetric(_SchemaModel):
     warnings: list[CalculationWarningCode] = Field(default_factory=list)
 
 
-class ComputeMetricsResponse(_SchemaModel):
+class ComputeMetricsResponse(SchemaModel):
     derived_metrics: list[DerivedMetric] = Field(default_factory=list)
     warnings: list[CalculationWarningCode] = Field(default_factory=list)
-

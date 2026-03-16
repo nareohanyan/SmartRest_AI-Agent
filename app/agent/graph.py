@@ -8,7 +8,7 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from app.agent.tools import resolve_scope_tool, run_report_tool
+from app.agent.report_tools import resolve_scope_tool, run_report_tool
 from app.schemas.agent import AgentState, IntentType, RunStatus
 from app.schemas.reports import ReportFilters, ReportRequest, ReportType
 from app.schemas.tools import AccessStatus, RunReportRequest

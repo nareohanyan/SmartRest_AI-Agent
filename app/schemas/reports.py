@@ -3,11 +3,9 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 
-
-class _SchemaModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+from app.schemas.base import SchemaModel
 
 
 class ReportType(str, Enum):
@@ -23,7 +21,7 @@ class ReportFilterKey(str, Enum):
     SOURCE = "source"
 
 
-class ReportFilters(_SchemaModel):
+class ReportFilters(SchemaModel):
     date_from: date
     date_to: date
     source: str | None = Field(default=None, min_length=1)
@@ -35,12 +33,12 @@ class ReportFilters(_SchemaModel):
         return self
 
 
-class ReportRequest(_SchemaModel):
+class ReportRequest(SchemaModel):
     report_id: ReportType
     filters: ReportFilters
 
 
-class ReportDefinition(_SchemaModel):
+class ReportDefinition(SchemaModel):
     report_id: ReportType
     title: str = Field(min_length=1)
     description: str = Field(min_length=1)
@@ -66,12 +64,12 @@ class ReportDefinition(_SchemaModel):
         return self
 
 
-class ReportMetric(_SchemaModel):
+class ReportMetric(SchemaModel):
     label: str = Field(min_length=1)
     value: float
 
 
-class ReportResult(_SchemaModel):
+class ReportResult(SchemaModel):
     report_id: ReportType
     filters: ReportFilters
     metrics: list[ReportMetric] = Field(min_length=1)

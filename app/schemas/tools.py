@@ -2,13 +2,10 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 
+from app.schemas.base import SchemaModel
 from app.schemas.reports import ReportDefinition, ReportRequest, ReportResult, ReportType
-
-
-class _SchemaModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
 
 
 class AccessStatus(str, Enum):
@@ -16,14 +13,14 @@ class AccessStatus(str, Enum):
     DENIED = "denied"
 
 
-class ResolveScopeRequest(_SchemaModel):
+class ResolveScopeRequest(SchemaModel):
     user_id: str = Field(min_length=1)
     profile_id: str = Field(min_length=1)
     profile_nick: str = Field(min_length=1)
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
-class ResolveScopeResponse(_SchemaModel):
+class ResolveScopeResponse(SchemaModel):
     status: AccessStatus
     allowed_report_ids: list[ReportType]
     denial_reason: str | None = None
@@ -39,32 +36,32 @@ class ResolveScopeResponse(_SchemaModel):
         return self
 
 
-class ListReportsRequest(_SchemaModel):
+class ListReportsRequest(SchemaModel):
     user_id: str = Field(min_length=1)
     profile_id: str = Field(min_length=1)
     profile_nick: str = Field(min_length=1)
     allowed_report_ids: list[ReportType]
 
 
-class ListReportsResponse(_SchemaModel):
+class ListReportsResponse(SchemaModel):
     reports: list[ReportDefinition]
 
 
-class GetReportDefinitionRequest(_SchemaModel):
+class GetReportDefinitionRequest(SchemaModel):
     report_id: ReportType
 
 
-class GetReportDefinitionResponse(_SchemaModel):
+class GetReportDefinitionResponse(SchemaModel):
     definition: ReportDefinition
 
 
-class RunReportRequest(_SchemaModel):
+class RunReportRequest(SchemaModel):
     user_id: str = Field(min_length=1)
     profile_id: str = Field(min_length=1)
     profile_nick: str = Field(min_length=1)
     request: ReportRequest
 
 
-class RunReportResponse(_SchemaModel):
+class RunReportResponse(SchemaModel):
     result: ReportResult
     warnings: list[str] = Field(default_factory=list)
