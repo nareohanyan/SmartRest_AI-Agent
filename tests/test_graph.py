@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from app.agent.graph import build_agent_graph
@@ -49,13 +50,39 @@ def test_supported_request_executes_full_run_path() -> None:
         "interpret_request",
         "route_decision",
         "run_report",
+        "calc_metrics",
         "compose_answer",
     ]
     assert final_state.status is RunStatus.COMPLETED
     assert final_state.selected_report_id is ReportType.SALES_TOTAL
     assert final_state.tool_responses.run_report is not None
     assert final_state.tool_responses.run_report.result.metrics[0].value == 12345.67
+    assert final_state.base_metrics["sales_total"] == Decimal("12345.67")
+    assert len(final_state.derived_metrics) == 1
+    assert final_state.derived_metrics[0].key == "sales_total_per_day"
     assert "sales_total=12345.67" in (final_state.final_answer or "")
+    assert "sales_total_per_day=1763.67" in (final_state.final_answer or "")
+
+
+def test_average_check_without_formula_policy_still_completes() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state("What was average check 2026-03-01 to 2026-03-07?")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "interpret_request",
+        "route_decision",
+        "run_report",
+        "calc_metrics",
+        "compose_answer",
+    ]
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.selected_report_id is ReportType.AVERAGE_CHECK
+    assert final_state.derived_metrics == []
+    assert "calc_no_formulas_selected" in final_state.warnings
 
 
 def test_missing_date_routes_to_clarify_without_report_execution() -> None:

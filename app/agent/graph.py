@@ -8,8 +8,12 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
+from app.agent.calc_policy import select_calculation_specs
+from app.agent.calc_tools import compute_metrics_tool
+from app.agent.metrics_mapper import map_report_response_to_base_metrics
 from app.agent.report_tools import resolve_scope_tool, run_report_tool
 from app.schemas.agent import AgentState, IntentType, RunStatus
+from app.schemas.calculations import ComputeMetricsRequest
 from app.schemas.reports import ReportFilters, ReportRequest, ReportType
 from app.schemas.tools import AccessStatus, RunReportRequest
 
@@ -136,6 +140,49 @@ def _run_report_node(state: AgentState) -> dict[str, Any]:
     }
 
 
+def _calc_metrics_node(state: AgentState) -> dict[str, Any]:
+    run_response = state.tool_responses.run_report
+    if run_response is None:
+        return {
+            "status": RunStatus.FAILED,
+            "final_answer": "Calculation failed: report output is missing.",
+            "warnings": [*state.warnings, "calc_missing_report_output"],
+        }
+
+    try:
+        base_metrics = map_report_response_to_base_metrics(run_response)
+    except ValueError:
+        return {
+            "status": RunStatus.FAILED,
+            "final_answer": "Calculation failed: unable to map report metrics.",
+            "warnings": [*state.warnings, "calc_mapping_failed"],
+        }
+
+    report_id = state.selected_report_id or run_response.result.report_id
+    calculation_specs = select_calculation_specs(report_id, state.intent, base_metrics)
+
+    if not calculation_specs:
+        return {
+            "base_metrics": base_metrics,
+            "derived_metrics": [],
+            "calc_warnings": [],
+            "warnings": [*state.warnings, "calc_no_formulas_selected"],
+        }
+
+    request = ComputeMetricsRequest(
+        base_metrics=base_metrics,
+        calculations=calculation_specs,
+    )
+    response = compute_metrics_tool(request)
+    calc_warning_strings = [f"calc:{warning.value}" for warning in response.warnings]
+    return {
+        "base_metrics": base_metrics,
+        "derived_metrics": response.derived_metrics,
+        "calc_warnings": response.warnings,
+        "warnings": [*state.warnings, *calc_warning_strings],
+    }
+
+
 def _clarify_node(state: AgentState) -> dict[str, Any]:
     question = state.clarification_question or (
         "Please clarify your request by providing a date range."
@@ -176,10 +223,19 @@ def _compose_answer_node(state: AgentState) -> dict[str, Any]:
     metrics_text = ", ".join(
         f"{metric.label}={metric.value:.2f}" for metric in run_response.result.metrics
     )
+    derived_text = ", ".join(
+        (
+            f"{metric.key}={metric.value:.2f}"
+            if metric.value is not None
+            else f"{metric.key}=n/a"
+        )
+        for metric in state.derived_metrics
+    )
+    derived_suffix = f" Derived metrics: {derived_text}." if derived_text else ""
     final_answer = (
         f"Report {run_response.result.report_id.value} "
         f"for {run_response.result.filters.date_from} to {run_response.result.filters.date_to}: "
-        f"{metrics_text}."
+        f"{metrics_text}.{derived_suffix}"
     )
     return {
         "status": RunStatus.COMPLETED,
@@ -195,6 +251,7 @@ def build_agent_graph() -> Any:
     graph.add_node("interpret_request", _interpret_request_node)
     graph.add_node("route_decision", _route_decision_node)
     graph.add_node("run_report", _run_report_node)
+    graph.add_node("calc_metrics", _calc_metrics_node)
     graph.add_node("clarify", _clarify_node)
     graph.add_node("reject", _reject_node)
     graph.add_node("compose_answer", _compose_answer_node)
@@ -211,7 +268,8 @@ def build_agent_graph() -> Any:
             "reject": "reject",
         },
     )
-    graph.add_edge("run_report", "compose_answer")
+    graph.add_edge("run_report", "calc_metrics")
+    graph.add_edge("calc_metrics", "compose_answer")
     graph.add_edge("compose_answer", END)
     graph.add_edge("clarify", END)
     graph.add_edge("reject", END)

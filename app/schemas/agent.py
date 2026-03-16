@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from enum import Enum
 
 from pydantic import Field, model_validator
 
 from app.schemas.base import SchemaModel
+from app.schemas.calculations import CalculationWarningCode, DerivedMetric
 from app.schemas.reports import ReportFilters, ReportType
 from app.schemas.tools import (
     GetReportDefinitionResponse,
@@ -50,6 +52,9 @@ class AgentState(SchemaModel):
     needs_clarification: bool
     clarification_question: str | None = None
     tool_responses: ToolResponses = Field(default_factory=ToolResponses)
+    base_metrics: dict[str, Decimal] = Field(default_factory=dict)
+    derived_metrics: list[DerivedMetric] = Field(default_factory=list)
+    calc_warnings: list[CalculationWarningCode] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     final_answer: str | None = None
     status: RunStatus
