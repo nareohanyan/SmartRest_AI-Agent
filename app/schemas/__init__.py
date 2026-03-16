@@ -1,6 +1,21 @@
 """Typed schemas for the SmartRest agent boundaries."""
 
 from app.schemas.agent import AgentState, IntentType, RunStatus, ToolResponses
+from app.schemas.calculations import (
+    AverageCalculationSpec,
+    CalculationFormula,
+    CalculationRoundingMode,
+    CalculationWarningCode,
+    ComputeMetricsRequest,
+    ComputeMetricsResponse,
+    DeltaCalculationSpec,
+    DerivedMetric,
+    PercentChangeCalculationSpec,
+    PerDayRateCalculationSpec,
+    RatioCalculationSpec,
+    SharePercentCalculationSpec,
+    WeightedAverageCalculationSpec,
+)
 from app.schemas.reports import (
     ReportDefinition,
     ReportFilterKey,
@@ -24,12 +39,22 @@ from app.schemas.tools import (
 
 __all__ = [
     "AccessStatus",
+    "AverageCalculationSpec",
     "AgentState",
+    "CalculationFormula",
+    "CalculationRoundingMode",
+    "CalculationWarningCode",
+    "ComputeMetricsRequest",
+    "ComputeMetricsResponse",
+    "DeltaCalculationSpec",
+    "DerivedMetric",
     "GetReportDefinitionRequest",
     "GetReportDefinitionResponse",
     "IntentType",
     "ListReportsRequest",
     "ListReportsResponse",
+    "PerDayRateCalculationSpec",
+    "PercentChangeCalculationSpec",
     "ReportDefinition",
     "ReportFilterKey",
     "ReportFilters",
@@ -39,8 +64,11 @@ __all__ = [
     "ReportResult",
     "ResolveScopeRequest",
     "ResolveScopeResponse",
+    "RatioCalculationSpec",
     "RunReportRequest",
     "RunReportResponse",
     "RunStatus",
+    "SharePercentCalculationSpec",
     "ToolResponses",
+    "WeightedAverageCalculationSpec",
 ]
