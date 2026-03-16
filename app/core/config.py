@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,7 +14,10 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     log_level: str = "INFO"
-    openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
+    openai_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SMARTREST_OPENAI_API_KEY", "OPENAI_API_KEY")
+    )
     openai_model: str = "gpt-4o-mini"
     openai_timeout_seconds: float = 15.0
     openai_retry_max_attempts: int = 3
