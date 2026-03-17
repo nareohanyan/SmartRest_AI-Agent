@@ -16,13 +16,28 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     openai_api_key: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("SMARTREST_OPENAI_API_KEY", "OPENAI_API_KEY")
+        validation_alias=AliasChoices(
+            "SMARTREST_OPENAI_API_KEY",
+            "OPENAI_API_KEY"
+        )
     )
     openai_model: str = "gpt-4o-mini"
     openai_timeout_seconds: float = 15.0
     openai_retry_max_attempts: int = 3
     openai_retry_initial_delay_seconds: float = 0.2
     openai_retry_max_delay_seconds: float = 2.0
+
+    database_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SMARTREST_DATABASE_URL", "DATABASE_URL"),
+    )
+    chat_analytics_database_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SMARTREST_CHAT_ANALYTICS_DATABASE_URL",
+            "CHAT_ANALYTICS_DATABASE_URL",
+        ),
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="SMARTREST_",
