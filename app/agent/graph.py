@@ -10,6 +10,11 @@ from langgraph.graph import END, StateGraph
 
 from app.agent.calc_policy import select_calculation_specs
 from app.agent.calc_tools import compute_metrics_tool
+from app.agent.llm.prompts import (
+    CLARIFICATION_FALLBACK_QUESTION,
+    InterpretationContractError,
+    validate_interpretation_output,
+)
 from app.agent.metrics_mapper import map_report_response_to_base_metrics
 from app.agent.report_tools import resolve_scope_tool, run_report_tool
 from app.schemas.agent import AgentState, IntentType, RunStatus
@@ -46,6 +51,49 @@ def _extract_filters(question: str) -> ReportFilters | None:
         return None
 
 
+def _generate_interpretation_payload(question: str) -> dict[str, Any]:
+    selected_report_id = _detect_report_id(question)
+    if selected_report_id is None:
+        return {
+            "intent": IntentType.UNSUPPORTED_REQUEST,
+            "report_id": None,
+            "filters": None,
+            "needs_clarification": False,
+            "clarification_question": None,
+            "confidence": 0.3,
+            "reasoning_notes": "No supported report matched the request text.",
+        }
+
+    filters = _extract_filters(question)
+    if filters is None:
+        return {
+            "intent": IntentType.NEEDS_CLARIFICATION,
+            "report_id": selected_report_id,
+            "filters": None,
+            "needs_clarification": True,
+            "clarification_question": (
+                "Please provide a date range using YYYY-MM-DD to YYYY-MM-DD."
+            ),
+            "confidence": 0.7,
+            "reasoning_notes": "Report candidate detected but required date range is missing.",
+        }
+
+    intent = (
+        IntentType.BREAKDOWN_KPI
+        if selected_report_id is ReportType.SALES_BY_SOURCE
+        else IntentType.GET_KPI
+    )
+    return {
+        "intent": intent,
+        "report_id": selected_report_id,
+        "filters": filters,
+        "needs_clarification": False,
+        "clarification_question": None,
+        "confidence": 0.9,
+        "reasoning_notes": "Report and required filters were identified.",
+    }
+
+
 def _resolve_scope_node(state: AgentState) -> dict[str, Any]:
     if state.scope_request is None:
         return {
@@ -61,39 +109,25 @@ def _resolve_scope_node(state: AgentState) -> dict[str, Any]:
 
 
 def _interpret_request_node(state: AgentState) -> dict[str, Any]:
-    selected_report_id = _detect_report_id(state.user_question)
-    if selected_report_id is None:
-        return {
-            "intent": IntentType.UNSUPPORTED_REQUEST,
-            "selected_report_id": None,
-            "filters": None,
-            "needs_clarification": False,
-            "clarification_question": None,
-        }
-
-    filters = _extract_filters(state.user_question)
-    if filters is None:
+    raw_interpretation = _generate_interpretation_payload(state.user_question)
+    try:
+        interpretation = validate_interpretation_output(raw_interpretation)
+    except InterpretationContractError:
         return {
             "intent": IntentType.NEEDS_CLARIFICATION,
-            "selected_report_id": selected_report_id,
+            "selected_report_id": None,
             "filters": None,
             "needs_clarification": True,
-            "clarification_question": (
-                "Please provide a date range using YYYY-MM-DD to YYYY-MM-DD."
-            ),
+            "clarification_question": CLARIFICATION_FALLBACK_QUESTION,
+            "warnings": [*state.warnings, "interpretation_contract_invalid"],
         }
 
-    intent = (
-        IntentType.BREAKDOWN_KPI
-        if selected_report_id is ReportType.SALES_BY_SOURCE
-        else IntentType.GET_KPI
-    )
     return {
-        "intent": intent,
-        "selected_report_id": selected_report_id,
-        "filters": filters,
-        "needs_clarification": False,
-        "clarification_question": None,
+        "intent": interpretation.intent,
+        "selected_report_id": interpretation.report_id,
+        "filters": interpretation.filters,
+        "needs_clarification": interpretation.needs_clarification,
+        "clarification_question": interpretation.clarification_question,
     }
 
 

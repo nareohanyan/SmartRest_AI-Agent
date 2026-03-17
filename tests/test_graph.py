@@ -5,6 +5,9 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
+import pytest
+
+import app.agent.graph as graph_module
 from app.agent.graph import build_agent_graph
 from app.schemas.agent import AgentState, RunStatus
 from app.schemas.reports import ReportType
@@ -97,6 +100,37 @@ def test_missing_date_routes_to_clarify_without_report_execution() -> None:
     assert final_state.needs_clarification is True
     assert final_state.tool_responses.run_report is None
     assert "date range" in (final_state.final_answer or "").lower()
+
+
+def test_invalid_interpretation_output_routes_to_fallback_clarify(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _invalid_interpretation_output(_question: str) -> dict[str, object]:
+        return {
+            "intent": "get_kpi",
+            "report_id": "sales_total",
+            "filters": {"date_from": "2026-03-01", "date_to": "2026-03-07"},
+            "needs_clarification": False,
+            "clarification_question": None,
+            # Missing required "confidence" to force schema rejection.
+        }
+
+    monkeypatch.setattr(
+        graph_module,
+        "_generate_interpretation_payload",
+        _invalid_interpretation_output,
+    )
+    graph = build_agent_graph()
+    payload = _initial_state("What were total sales 2026-03-01 to 2026-03-07?")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == ["resolve_scope", "interpret_request", "route_decision", "clarify"]
+    assert final_state.status is RunStatus.CLARIFY
+    assert final_state.needs_clarification is True
+    assert final_state.clarification_question
+    assert "interpretation_contract_invalid" in final_state.warnings
 
 
 def test_unsupported_request_routes_to_reject() -> None:
