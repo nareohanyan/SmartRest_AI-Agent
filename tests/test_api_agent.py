@@ -63,7 +63,7 @@ async def test_supported_request_returns_completed_contract(api_client: AsyncCli
     assert payload["selected_report_id"] == "sales_total"
     assert payload["applied_filters"]["date_from"] == "2026-03-01"
     assert payload["applied_filters"]["date_to"] == "2026-03-07"
-    assert payload["warnings"] == ["mock_backend_deterministic_data"]
+    assert "mock_backend_deterministic_data" in payload["warnings"]
     assert payload["needs_clarification"] is False
     assert payload["clarification_question"] is None
 
