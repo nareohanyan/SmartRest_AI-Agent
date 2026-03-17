@@ -5,6 +5,7 @@ from app.agent.llm.client import (
     get_llm_client,
     normalize_llm_error,
 )
+from app.agent.llm.exceptions import LLMClientError
 from app.agent.llm.prompts import (
     CLARIFICATION_FALLBACK_QUESTION,
     INTERPRET_REQUEST_SYSTEM_PROMPT,
@@ -14,7 +15,6 @@ from app.agent.llm.prompts import (
     parse_interpretation_output_json,
     validate_interpretation_output,
 )
-from app.agent.llm.exceptions import LLMClientError
 
 __all__ = [
     "CLARIFICATION_FALLBACK_QUESTION",
