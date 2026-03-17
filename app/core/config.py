@@ -21,7 +21,7 @@ class Settings(BaseSettings):
             "OPENAI_API_KEY"
         )
     )
-    openai_model: str = "gpt-4o-mini"
+    openai_model: str = "gpt-4.1-mini"
     openai_timeout_seconds: float = 15.0
     openai_retry_max_attempts: int = 3
     openai_retry_initial_delay_seconds: float = 0.2
