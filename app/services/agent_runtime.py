@@ -1,17 +1,38 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from enum import Enum
 from typing import Any
 from uuid import uuid4
 
 from app.agent.graph import build_agent_graph
+from app.agent.llm.exceptions import LLMClientError
 from app.api.schemas import AgentRunRequest, AgentRunResponse
-from app.schemas.agent import AgentState, RunStatus
+from app.schemas.agent import AgentState, LLMErrorCategory, RunStatus
 from app.schemas.tools import ResolveScopeRequest
 
 
+class RuntimeErrorCategory(str, Enum):
+    INTERNAL = "internal"
+    LLM_TIMEOUT = "llm_timeout"
+    LLM_CONNECTION = "llm_connection"
+    LLM_RATE_LIMIT = "llm_rate_limit"
+    LLM_AUTHENTICATION = "llm_authentication"
+    LLM_BAD_REQUEST = "llm_bad_request"
+    LLM_SERVER = "llm_server"
+    LLM_UNKNOWN = "llm_unknown"
+
+
 class AgentRuntimeExecutionError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: RuntimeErrorCategory = RuntimeErrorCategory.INTERNAL,
+    ) -> None:
+        super().__init__(message)
+        self.category = category
+
 
 class AgentRuntimeService:
     def __init__(self, graph_factory: Callable[[], Any] = build_agent_graph) -> None:
@@ -32,8 +53,16 @@ class AgentRuntimeService:
             graph = self._graph_factory()
             runtime_output = graph.invoke(initial_state.model_dump(mode="json"))
             final_state = AgentState.model_validate(runtime_output)
+        except LLMClientError as exc:
+            raise AgentRuntimeExecutionError(
+                "Agent runtime execution failed.",
+                category=_map_llm_error_category(exc.category),
+            ) from exc
         except Exception as exc:
-            raise AgentRuntimeExecutionError("Agent runtime execution failed.") from exc
+            raise AgentRuntimeExecutionError(
+                "Agent runtime execution failed.",
+                category=RuntimeErrorCategory.INTERNAL,
+            ) from exc
 
         return AgentRunResponse(
             thread_id=final_state.thread_id,
@@ -46,6 +75,19 @@ class AgentRuntimeService:
             needs_clarification=final_state.needs_clarification,
             clarification_question=final_state.clarification_question,
         )
+
+
+def _map_llm_error_category(category: LLMErrorCategory) -> RuntimeErrorCategory:
+    mapping: dict[LLMErrorCategory, RuntimeErrorCategory] = {
+        LLMErrorCategory.TIMEOUT: RuntimeErrorCategory.LLM_TIMEOUT,
+        LLMErrorCategory.CONNECTION: RuntimeErrorCategory.LLM_CONNECTION,
+        LLMErrorCategory.RATE_LIMIT: RuntimeErrorCategory.LLM_RATE_LIMIT,
+        LLMErrorCategory.AUTHENTICATION: RuntimeErrorCategory.LLM_AUTHENTICATION,
+        LLMErrorCategory.BAD_REQUEST: RuntimeErrorCategory.LLM_BAD_REQUEST,
+        LLMErrorCategory.SERVER: RuntimeErrorCategory.LLM_SERVER,
+        LLMErrorCategory.UNKNOWN: RuntimeErrorCategory.LLM_UNKNOWN,
+    }
+    return mapping[category]
 
 
 def get_agent_runtime_service() -> AgentRuntimeService:

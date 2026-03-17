@@ -70,3 +70,13 @@ class AgentState(SchemaModel):
             raise ValueError("status=clarify requires needs_clarification=true")
 
         return self
+
+
+class LLMErrorCategory(str, Enum):
+    TIMEOUT = "timeout"
+    CONNECTION = "connection"
+    RATE_LIMIT = "rate_limit"
+    AUTHENTICATION = "authentication"
+    BAD_REQUEST = "bad_request"
+    SERVER = "server"
+    UNKNOWN = "unknown"

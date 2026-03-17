@@ -5,7 +5,7 @@ services:
     env_file:
       - .env
     ports:
-      - "8000:8000"
+      - "8001:8000"
     command: >
       python -m uvicorn app.main:app
       --host 0.0.0.0
@@ -29,6 +29,15 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  adminer:
+    image: adminer
+    restart: unless-stopped
+    profiles: ["db"]
+    depends_on:
+      - smartrest_db
+    ports:
+      - "8081:8080"
 
 volumes:
   pgdata:
