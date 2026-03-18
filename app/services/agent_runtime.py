@@ -49,14 +49,23 @@ class AgentRuntimeService:
         self._persistence_service = persistence_service or get_runtime_persistence_service()
 
     def run(self, request: AgentRunRequest) -> AgentRunResponse:
-        run_id = uuid4().hex
+        run_id = uuid4()
+        initial_state = AgentState(
+            thread_id=request.thread_id,
+            run_id=run_id,
+            user_question=request.user_question,
+            scope_request=ResolveScopeRequest.model_validate(request.scope_request.model_dump()),
+            needs_clarification=False,
+            status=RunStatus.RUNNING,
+        )
+
         start_persistence_result = self._persistence_service.start_run(
-            external_thread_id=request.thread_id,
+            thread_id=request.thread_id,
             user_id=request.scope_request.user_id,
             profile_id=request.scope_request.profile_id,
             profile_nick=request.scope_request.profile_nick,
             intent=None,
-            metadata_json={"external_thread_id": request.thread_id},
+            metadata_json={"thread_id": str(request.thread_id)},
         )
         start_warnings = start_persistence_result.warnings
 
@@ -80,7 +89,7 @@ class AgentRuntimeService:
             final_state = AgentState.model_validate(runtime_output)
         except LLMClientError as exc:
             self._persistence_service.finish_run(
-                internal_thread_id=start_persistence_result.internal_thread_id,
+                thread_id=start_persistence_result.thread_id,
                 internal_run_id=start_persistence_result.internal_run_id,
                 status=RunStatus.FAILED,
                 question=request.user_question,
@@ -94,7 +103,7 @@ class AgentRuntimeService:
             ) from exc
         except Exception as exc:
             self._persistence_service.finish_run(
-                internal_thread_id=start_persistence_result.internal_thread_id,
+                thread_id=start_persistence_result.thread_id,
                 internal_run_id=start_persistence_result.internal_run_id,
                 status=RunStatus.FAILED,
                 question=request.user_question,
@@ -107,6 +116,23 @@ class AgentRuntimeService:
                 category=RuntimeErrorCategory.INTERNAL,
             ) from exc
 
+        finish_persistence_result = self._persistence_service.finish_run(
+            thread_id=start_persistence_result.thread_id,
+            internal_run_id=start_persistence_result.internal_run_id,
+            status=final_state.status,
+            question=final_state.user_question,
+            answer=final_state.final_answer,
+            error_message=(
+                final_state.final_answer
+                if final_state.status is RunStatus.FAILED
+                else None
+            ),
+        )
+        warnings = _merge_warnings(
+            final_state.warnings,
+            start_warnings,
+            finish_persistence_result.warnings,
+        )
         if not final_state.run_persisted:
             finish_persistence_result = self._persistence_service.finish_run(
                 internal_thread_id=start_persistence_result.internal_thread_id,

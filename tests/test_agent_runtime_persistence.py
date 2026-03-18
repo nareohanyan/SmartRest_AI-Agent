@@ -19,11 +19,11 @@ from app.services.agent_runtime import AgentRuntimeExecutionError, AgentRuntimeS
 def _request_payload() -> AgentRunRequest:
     return AgentRunRequest.model_validate(
         {
-            "thread_id": "thread-1",
+            "thread_id": "11111111-1111-1111-1111-111111111111",
             "user_question": "What were total sales 2026-03-01 to 2026-03-07?",
             "scope_request": {
-                "user_id": "u-1",
-                "profile_id": "p-1",
+                "user_id": 101,
+                "profile_id": 201,
                 "profile_nick": "nick",
                 "metadata": {},
             },
@@ -120,7 +120,7 @@ class _PersistenceSpy:
 def test_runtime_merges_persistence_warnings_into_response() -> None:
     spy = _PersistenceSpy(
         start_result=StartRunPersistenceResult(
-            internal_thread_id=uuid4(),
+            thread_id=uuid4(),
             internal_run_id=uuid4(),
             warnings=["persistence_warning_start"],
         ),
@@ -160,7 +160,7 @@ def test_runtime_persists_finish_for_each_terminal_graph_status(
 ) -> None:
     spy = _PersistenceSpy(
         start_result=StartRunPersistenceResult(
-            internal_thread_id=uuid4(),
+            thread_id=uuid4(),
             internal_run_id=uuid4(),
         ),
         finish_result=FinishRunPersistenceResult(),
@@ -184,7 +184,7 @@ def test_runtime_persists_finish_for_each_terminal_graph_status(
 def test_runtime_persists_failed_terminal_status_on_llm_error() -> None:
     spy = _PersistenceSpy(
         start_result=StartRunPersistenceResult(
-            internal_thread_id=uuid4(),
+            thread_id=uuid4(),
             internal_run_id=uuid4(),
         ),
         finish_result=FinishRunPersistenceResult(),
@@ -207,7 +207,7 @@ def test_runtime_persists_failed_terminal_status_on_llm_error() -> None:
 def test_runtime_persists_failed_terminal_status_on_internal_error() -> None:
     spy = _PersistenceSpy(
         start_result=StartRunPersistenceResult(
-            internal_thread_id=uuid4(),
+            thread_id=uuid4(),
             internal_run_id=uuid4(),
         ),
         finish_result=FinishRunPersistenceResult(),

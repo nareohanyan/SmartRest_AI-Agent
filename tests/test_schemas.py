@@ -36,10 +36,10 @@ def _scope_response_payload() -> dict[str, object]:
     }
 
 
-def _identity_payload() -> dict[str, str]:
+def _identity_payload() -> dict[str, int | str]:
     return {
-        "user_id": "u1",
-        "profile_id": "p1",
+        "user_id": 1,
+        "profile_id": 2,
         "profile_nick": "nick_1",
     }
 
@@ -68,8 +68,8 @@ def _report_result_payload() -> dict[str, object]:
 
 def _agent_state_payload() -> dict[str, object]:
     return {
-        "thread_id": "thread-01",
-        "run_id": "run-01",
+        "thread_id": "11111111-1111-1111-1111-111111111111",
+        "run_id": "22222222-2222-2222-2222-222222222222",
         "user_question": "What were sales last week?",
         "scope_request": _identity_payload(),
         "user_scope": _scope_response_payload(),
@@ -195,11 +195,11 @@ def test_resolve_scope_contracts_valid_and_invalid() -> None:
     scope_request = ResolveScopeRequest.model_validate(_identity_payload())
     scope_response = ResolveScopeResponse.model_validate(_scope_response_payload())
 
-    assert scope_request.user_id == "u1"
+    assert scope_request.user_id == 1
     assert scope_response.status is AccessStatus.GRANTED
 
     with pytest.raises(ValidationError) as missing_field_exc:
-        ResolveScopeRequest.model_validate({"user_id": "u1", "profile_nick": "nick_1"})
+        ResolveScopeRequest.model_validate({"user_id": 1, "profile_nick": "nick_1"})
 
     assert any(
         error["loc"] == ("profile_id",) and error["type"] == "missing"

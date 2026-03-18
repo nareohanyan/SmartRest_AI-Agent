@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
@@ -9,7 +9,6 @@ from app.persistence.errors import PersistenceNotFoundError, PersistenceValidati
 from app.persistence.runtime_persistence import (
     PERSISTENCE_WARNING_INVALID_IDENTITY,
     PERSISTENCE_WARNING_INVALID_INPUT,
-    PERSISTENCE_WARNING_INVALID_THREAD_ID,
     PERSISTENCE_WARNING_MISSING_CONTEXT,
     PERSISTENCE_WARNING_NOT_FOUND,
     PERSISTENCE_WARNING_UNAVAILABLE,
@@ -39,6 +38,7 @@ def _session_factory() -> _SessionStub:
 
 
 def test_start_run_success_returns_internal_ids() -> None:
+    thread_id = uuid4()
     run_id = uuid4()
 
     class _Repository:
@@ -57,35 +57,20 @@ def test_start_run_success_returns_internal_ids() -> None:
     )
 
     result = service.start_run(
-        external_thread_id="thread-api-1",
+        thread_id=thread_id,
         user_id=1,
         profile_id=2,
         profile_nick="nick",
     )
 
-    assert isinstance(result.internal_thread_id, UUID)
+    assert result.thread_id == thread_id
     assert result.internal_run_id == run_id
     assert result.warnings == []
 
 
-def test_start_run_invalid_thread_id_returns_warning() -> None:
-    service = RuntimePersistenceService(
-        session_factory=_session_factory,
-    )
-
-    result = service.start_run(
-        external_thread_id=" ",
-        user_id=1,
-        profile_id=2,
-        profile_nick="nick",
-    )
-
-    assert result.internal_thread_id is None
-    assert result.internal_run_id is None
-    assert result.warnings == [PERSISTENCE_WARNING_INVALID_THREAD_ID]
-
-
 def test_start_run_invalid_identity_returns_warning() -> None:
+    thread_id = uuid4()
+
     class _Repository:
         def __init__(self, _session: Session) -> None:
             pass
@@ -102,7 +87,7 @@ def test_start_run_invalid_identity_returns_warning() -> None:
     )
 
     result = service.start_run(
-        external_thread_id="thread-api-1",
+        thread_id=thread_id,
         user_id="u-1",
         profile_id=2,
         profile_nick="nick",
@@ -112,6 +97,8 @@ def test_start_run_invalid_identity_returns_warning() -> None:
 
 
 def test_start_run_invalid_identity_is_detected_before_session_open() -> None:
+    thread_id = uuid4()
+
     def _failing_session_factory() -> Session:
         raise AssertionError("session should not be opened for invalid identity")
 
@@ -120,7 +107,7 @@ def test_start_run_invalid_identity_is_detected_before_session_open() -> None:
     )
 
     result = service.start_run(
-        external_thread_id="thread-api-1",
+        thread_id=thread_id,
         user_id="u-1",
         profile_id="p-1",
         profile_nick="nick",
@@ -130,6 +117,8 @@ def test_start_run_invalid_identity_is_detected_before_session_open() -> None:
 
 
 def test_start_run_unavailable_returns_warning() -> None:
+    thread_id = uuid4()
+
     class _Repository:
         def __init__(self, _session: Session) -> None:
             pass
@@ -146,7 +135,7 @@ def test_start_run_unavailable_returns_warning() -> None:
     )
 
     result = service.start_run(
-        external_thread_id="thread-api-1",
+        thread_id=thread_id,
         user_id=1,
         profile_id=2,
         profile_nick="nick",
@@ -175,7 +164,7 @@ def test_finish_run_success_updates_status_and_message() -> None:
         repository_factory=_Repository,
     )
     result = service.finish_run(
-        internal_thread_id=uuid4(),
+        thread_id=uuid4(),
         internal_run_id=uuid4(),
         status=RunStatus.COMPLETED,
         question="q",
@@ -190,7 +179,7 @@ def test_finish_run_missing_context_returns_warning() -> None:
     service = RuntimePersistenceService(session_factory=_session_factory)
 
     result = service.finish_run(
-        internal_thread_id=None,
+        thread_id=None,
         internal_run_id=None,
         status=RunStatus.FAILED,
         question="q",
@@ -217,7 +206,7 @@ def test_finish_run_not_found_returns_warning() -> None:
     )
 
     result = service.finish_run(
-        internal_thread_id=uuid4(),
+        thread_id=uuid4(),
         internal_run_id=uuid4(),
         status=RunStatus.DENIED,
         question="q",
@@ -244,7 +233,7 @@ def test_finish_run_invalid_input_returns_warning() -> None:
     )
 
     result = service.finish_run(
-        internal_thread_id=uuid4(),
+        thread_id=uuid4(),
         internal_run_id=uuid4(),
         status=RunStatus.COMPLETED,
         question="",
@@ -271,7 +260,7 @@ def test_finish_run_unavailable_returns_warning() -> None:
     )
 
     result = service.finish_run(
-        internal_thread_id=uuid4(),
+        thread_id=uuid4(),
         internal_run_id=uuid4(),
         status=RunStatus.FAILED,
         question="q",

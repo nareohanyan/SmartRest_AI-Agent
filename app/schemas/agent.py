@@ -42,8 +42,8 @@ class ToolResponses(SchemaModel):
 
 
 class AgentState(SchemaModel):
-    thread_id: str = Field(min_length=1)
-    run_id: str = Field(min_length=1)
+    thread_id: UUID
+    run_id: UUID
     user_question: str = Field(min_length=1)
     scope_request: ResolveScopeRequest | None = None
     user_scope: ResolveScopeResponse | None = None

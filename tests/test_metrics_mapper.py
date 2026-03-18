@@ -13,10 +13,10 @@ from app.schemas.reports import ReportFilters, ReportMetric, ReportRequest, Repo
 from app.schemas.tools import RunReportRequest, RunReportResponse
 
 
-def _identity_payload() -> dict[str, str]:
+def _identity_payload() -> dict[str, int | str]:
     return {
-        "user_id": "u-123",
-        "profile_id": "p-456",
+        "user_id": 123,
+        "profile_id": 456,
         "profile_nick": "ChefNick",
     }
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.agent import RunStatus
@@ -11,21 +13,21 @@ class _ApiSchema(BaseModel):
 
 
 class ScopeRequestPayload(_ApiSchema):
-    user_id: str = Field(min_length=1)
-    profile_id: str = Field(min_length=1)
+    user_id: int
+    profile_id: int
     profile_nick: str = Field(min_length=1)
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class AgentRunRequest(_ApiSchema):
-    thread_id: str = Field(min_length=1)
+    thread_id: UUID
     user_question: str = Field(min_length=1)
     scope_request: ScopeRequestPayload
 
 
 class AgentRunResponse(_ApiSchema):
-    thread_id: str
-    run_id: str
+    thread_id: UUID
+    run_id: UUID
     status: RunStatus
     answer: str | None = None
     selected_report_id: ReportType | None = None
