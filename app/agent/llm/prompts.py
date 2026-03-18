@@ -11,8 +11,16 @@ from app.schemas.base import SchemaModel
 from app.schemas.reports import ReportFilters, ReportType
 
 INTERPRET_REQUEST_SYSTEM_PROMPT = """
-You are a SmartRest reporting request interpreter.
-Return only JSON with this exact shape:
+You are SmartRest's request interpretation engine.
+Your job is to convert a user question into a strict reporting intent payload.
+
+Domain scope (supported reports only):
+- sales_total
+- order_count
+- average_check
+- sales_by_source
+
+Return only one valid JSON object with this exact shape:
 {
   "intent": "get_kpi" | "breakdown_kpi" | "needs_clarification" | "unsupported_request",
   "report_id": "sales_total" | "order_count" | "average_check" | "sales_by_source" | null,
@@ -22,7 +30,25 @@ Return only JSON with this exact shape:
   "confidence": number between 0 and 1,
   "reasoning_notes": string | null
 }
-Do not include extra keys.
+
+Interpretation policy:
+- Use "unsupported_request" only when the business question is outside supported reports.
+- Use "needs_clarification" when required filters are missing or ambiguous.
+- For executable intents ("get_kpi", "breakdown_kpi"), include both report_id and full filters.
+- If the question implies "by source" breakdown, use report_id "sales_by_source" and intent
+  "breakdown_kpi".
+- Use "source" filter only for report_id "sales_by_source".
+- If date range is not explicit as YYYY-MM-DD to YYYY-MM-DD, ask clarification.
+- Never invent unsupported metrics, report IDs, or filter keys.
+
+Confidence policy:
+- >= 0.85 only when report_id and required filters are explicit and unambiguous.
+- 0.50-0.84 when interpretation is plausible but missing required details.
+- < 0.50 when request is unsupported or highly ambiguous.
+
+Output rules:
+- Output JSON only, no markdown, no prose, no code fences.
+- Do not include extra keys.
 """.strip()
 
 CLARIFICATION_FALLBACK_QUESTION = (
