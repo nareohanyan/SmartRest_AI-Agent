@@ -6,14 +6,17 @@ import json
 from collections.abc import Sequence
 from decimal import Decimal
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
 import app.agent.graph as graph_module
 from app.agent.graph import build_agent_graph
 from app.agent.llm.exceptions import LLMClientError
+from app.persistence.runtime_persistence import FinishRunPersistenceResult
 from app.schemas.agent import AgentState, LLMErrorCategory, RunStatus
 from app.schemas.reports import ReportType
+from app.schemas.tools import AccessStatus, ResolveScopeResponse
 
 
 class _FakeLLMClient:
@@ -82,11 +85,13 @@ def test_supported_request_executes_full_run_path() -> None:
 
     assert order == [
         "resolve_scope",
-        "interpret_request",
-        "route_decision",
+        "openai_interpret",
+        "authorize_report",
         "run_report",
         "calc_metrics",
-        "compose_answer",
+        "reason_over_results",
+        "compose_output",
+        "persist_run",
     ]
     assert final_state.status is RunStatus.COMPLETED
     assert final_state.selected_report_id is ReportType.SALES_TOTAL
@@ -108,11 +113,13 @@ def test_average_check_without_formula_policy_still_completes() -> None:
 
     assert order == [
         "resolve_scope",
-        "interpret_request",
-        "route_decision",
+        "openai_interpret",
+        "authorize_report",
         "run_report",
         "calc_metrics",
-        "compose_answer",
+        "reason_over_results",
+        "compose_output",
+        "persist_run",
     ]
     assert final_state.status is RunStatus.COMPLETED
     assert final_state.selected_report_id is ReportType.AVERAGE_CHECK
@@ -127,7 +134,13 @@ def test_missing_date_routes_to_clarify_without_report_execution() -> None:
     final_state = AgentState.model_validate(graph.invoke(payload))
     order = _node_order(graph, payload)
 
-    assert order == ["resolve_scope", "interpret_request", "route_decision", "clarify"]
+    assert order == [
+        "resolve_scope",
+        "openai_interpret",
+        "authorize_report",
+        "clarify",
+        "persist_run",
+    ]
     assert final_state.status is RunStatus.CLARIFY
     assert final_state.needs_clarification is True
     assert final_state.tool_responses.run_report is None
@@ -149,11 +162,13 @@ def test_missing_date_routes_to_clarify_without_report_execution() -> None:
             },
             [
                 "resolve_scope",
-                "interpret_request",
-                "route_decision",
+                "openai_interpret",
+                "authorize_report",
                 "run_report",
                 "calc_metrics",
-                "compose_answer",
+                "reason_over_results",
+                "compose_output",
+                "persist_run",
             ],
             RunStatus.COMPLETED,
             ReportType.SALES_TOTAL,
@@ -168,7 +183,13 @@ def test_missing_date_routes_to_clarify_without_report_execution() -> None:
                 "confidence": 0.52,
                 "reasoning_notes": "Missing required date filter.",
             },
-            ["resolve_scope", "interpret_request", "route_decision", "clarify"],
+            [
+                "resolve_scope",
+                "openai_interpret",
+                "authorize_report",
+                "clarify",
+                "persist_run",
+            ],
             RunStatus.CLARIFY,
             None,
         ),
@@ -182,7 +203,13 @@ def test_missing_date_routes_to_clarify_without_report_execution() -> None:
                 "confidence": 0.18,
                 "reasoning_notes": "Unsupported domain request.",
             },
-            ["resolve_scope", "interpret_request", "route_decision", "reject"],
+            [
+                "resolve_scope",
+                "openai_interpret",
+                "authorize_report",
+                "reject",
+                "persist_run",
+            ],
             RunStatus.REJECTED,
             None,
         ),
@@ -220,7 +247,13 @@ def test_malformed_llm_output_routes_to_fallback_clarify(
     final_state = AgentState.model_validate(graph.invoke(payload))
     order = _node_order(graph, payload)
 
-    assert order == ["resolve_scope", "interpret_request", "route_decision", "clarify"]
+    assert order == [
+        "resolve_scope",
+        "openai_interpret",
+        "authorize_report",
+        "clarify",
+        "persist_run",
+    ]
     assert final_state.status is RunStatus.CLARIFY
     assert "interpretation_contract_invalid" in final_state.warnings
 
@@ -298,7 +331,13 @@ def test_invalid_interpretation_output_routes_to_fallback_clarify(
     final_state = AgentState.model_validate(graph.invoke(payload))
     order = _node_order(graph, payload)
 
-    assert order == ["resolve_scope", "interpret_request", "route_decision", "clarify"]
+    assert order == [
+        "resolve_scope",
+        "openai_interpret",
+        "authorize_report",
+        "clarify",
+        "persist_run",
+    ]
     assert final_state.status is RunStatus.CLARIFY
     assert final_state.needs_clarification is True
     assert final_state.clarification_question
@@ -312,7 +351,13 @@ def test_unsupported_request_routes_to_reject() -> None:
     final_state = AgentState.model_validate(graph.invoke(payload))
     order = _node_order(graph, payload)
 
-    assert order == ["resolve_scope", "interpret_request", "route_decision", "reject"]
+    assert order == [
+        "resolve_scope",
+        "openai_interpret",
+        "authorize_report",
+        "reject",
+        "persist_run",
+    ]
     assert final_state.status is RunStatus.REJECTED
     assert final_state.tool_responses.run_report is None
     assert "unsupported request" in (final_state.final_answer or "").lower()
@@ -328,7 +373,111 @@ def test_scope_denied_blocks_report_execution() -> None:
     final_state = AgentState.model_validate(graph.invoke(payload))
     order = _node_order(graph, payload)
 
-    assert order == ["resolve_scope", "interpret_request", "route_decision", "reject"]
+    assert order == [
+        "resolve_scope",
+        "openai_interpret",
+        "authorize_report",
+        "deny",
+        "persist_run",
+    ]
     assert final_state.status is RunStatus.DENIED
     assert final_state.tool_responses.run_report is None
     assert "access denied" in (final_state.final_answer or "").lower()
+
+
+def test_disallowed_report_is_blocked_before_run_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_report_called = False
+
+    def _restricted_scope(_request: Any) -> ResolveScopeResponse:
+        return ResolveScopeResponse(
+            status=AccessStatus.GRANTED,
+            allowed_report_ids=[ReportType.ORDER_COUNT],
+            denial_reason=None,
+        )
+
+    def _run_report_must_not_execute(_request: Any) -> Any:
+        nonlocal run_report_called
+        run_report_called = True
+        raise AssertionError("run_report should not execute for disallowed report.")
+
+    monkeypatch.setattr(graph_module, "resolve_scope_tool", _restricted_scope)
+    monkeypatch.setattr(graph_module, "run_report_tool", _run_report_must_not_execute)
+    graph = build_agent_graph()
+    payload = _initial_state("What were total sales 2026-03-01 to 2026-03-07?")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "openai_interpret",
+        "authorize_report",
+        "deny",
+        "persist_run",
+    ]
+    assert run_report_called is False
+    assert final_state.status is RunStatus.DENIED
+    assert final_state.tool_responses.run_report is None
+    assert "authorization_blocked_report_not_allowed" in final_state.warnings
+
+
+def test_calc_mapping_failure_routes_to_fail_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise_mapping_error(_run_response: Any) -> dict[str, Decimal]:
+        raise ValueError("mapping failed")
+
+    monkeypatch.setattr(graph_module, "map_report_response_to_base_metrics", _raise_mapping_error)
+    graph = build_agent_graph()
+    payload = _initial_state("What were total sales 2026-03-01 to 2026-03-07?")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "openai_interpret",
+        "authorize_report",
+        "run_report",
+        "calc_metrics",
+        "fail",
+        "persist_run",
+    ]
+    assert final_state.status is RunStatus.FAILED
+    assert "calc_mapping_failed" in final_state.warnings
+
+
+def test_persist_run_node_executes_finish_when_persistence_service_is_provided() -> None:
+    class _PersistenceSpy:
+        def __init__(self) -> None:
+            self.finish_calls: list[dict[str, Any]] = []
+
+        def finish_run(self, **kwargs: Any) -> FinishRunPersistenceResult:
+            self.finish_calls.append(kwargs)
+            return FinishRunPersistenceResult(warnings=["persistence_warning_finish"])
+
+    spy = _PersistenceSpy()
+    graph = build_agent_graph(persistence_service=spy)  # type: ignore[arg-type]
+    payload = _initial_state("What were total sales 2026-03-01 to 2026-03-07?")
+    payload["internal_thread_id"] = str(uuid4())
+    payload["internal_run_id"] = str(uuid4())
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "openai_interpret",
+        "authorize_report",
+        "run_report",
+        "calc_metrics",
+        "reason_over_results",
+        "compose_output",
+        "persist_run",
+    ]
+    assert len(spy.finish_calls) == 2
+    assert all(call["status"] is RunStatus.COMPLETED for call in spy.finish_calls)
+    assert final_state.run_persisted is True
+    assert "persistence_warning_finish" in final_state.warnings

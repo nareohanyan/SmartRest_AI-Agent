@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from enum import Enum
 from typing import Any
@@ -41,7 +42,7 @@ class AgentRuntimeExecutionError(RuntimeError):
 class AgentRuntimeService:
     def __init__(
         self,
-        graph_factory: Callable[[], Any] = build_agent_graph,
+        graph_factory: Callable[..., Any] = build_agent_graph,
         persistence_service: RuntimePersistenceService | None = None,
     ) -> None:
         self._graph_factory = graph_factory
@@ -49,15 +50,6 @@ class AgentRuntimeService:
 
     def run(self, request: AgentRunRequest) -> AgentRunResponse:
         run_id = uuid4().hex
-        initial_state = AgentState(
-            thread_id=request.thread_id,
-            run_id=run_id,
-            user_question=request.user_question,
-            scope_request=ResolveScopeRequest.model_validate(request.scope_request.model_dump()),
-            needs_clarification=False,
-            status=RunStatus.RUNNING,
-        )
-
         start_persistence_result = self._persistence_service.start_run(
             external_thread_id=request.thread_id,
             user_id=request.scope_request.user_id,
@@ -68,8 +60,22 @@ class AgentRuntimeService:
         )
         start_warnings = start_persistence_result.warnings
 
+        initial_state = AgentState(
+            thread_id=request.thread_id,
+            run_id=run_id,
+            user_question=request.user_question,
+            scope_request=ResolveScopeRequest.model_validate(request.scope_request.model_dump()),
+            needs_clarification=False,
+            internal_thread_id=start_persistence_result.internal_thread_id,
+            internal_run_id=start_persistence_result.internal_run_id,
+            status=RunStatus.RUNNING,
+        )
+
         try:
-            graph = self._graph_factory()
+            graph = _build_graph(
+                self._graph_factory,
+                persistence_service=self._persistence_service,
+            )
             runtime_output = graph.invoke(initial_state.model_dump(mode="json"))
             final_state = AgentState.model_validate(runtime_output)
         except LLMClientError as exc:
@@ -101,23 +107,26 @@ class AgentRuntimeService:
                 category=RuntimeErrorCategory.INTERNAL,
             ) from exc
 
-        finish_persistence_result = self._persistence_service.finish_run(
-            internal_thread_id=start_persistence_result.internal_thread_id,
-            internal_run_id=start_persistence_result.internal_run_id,
-            status=final_state.status,
-            question=final_state.user_question,
-            answer=final_state.final_answer,
-            error_message=(
-                final_state.final_answer
-                if final_state.status is RunStatus.FAILED
-                else None
-            ),
-        )
-        warnings = _merge_warnings(
-            final_state.warnings,
-            start_warnings,
-            finish_persistence_result.warnings,
-        )
+        if not final_state.run_persisted:
+            finish_persistence_result = self._persistence_service.finish_run(
+                internal_thread_id=start_persistence_result.internal_thread_id,
+                internal_run_id=start_persistence_result.internal_run_id,
+                status=final_state.status,
+                question=final_state.user_question,
+                answer=final_state.final_answer,
+                error_message=(
+                    final_state.final_answer
+                    if final_state.status is RunStatus.FAILED
+                    else None
+                ),
+            )
+            warnings = _merge_warnings(
+                final_state.warnings,
+                start_warnings,
+                finish_persistence_result.warnings,
+            )
+        else:
+            warnings = _merge_warnings(final_state.warnings, start_warnings)
 
         return AgentRunResponse(
             thread_id=final_state.thread_id,
@@ -155,6 +164,22 @@ def _merge_warnings(*warning_groups: list[str]) -> list[str]:
             seen.add(warning)
             merged.append(warning)
     return merged
+
+
+def _build_graph(
+    graph_factory: Callable[..., Any],
+    *,
+    persistence_service: RuntimePersistenceService,
+) -> Any:
+    try:
+        parameters = inspect.signature(graph_factory).parameters
+    except (TypeError, ValueError):
+        return graph_factory()
+    if "persistence_service" in parameters:
+        return graph_factory(persistence_service=persistence_service)
+    if len(parameters) == 1:
+        return graph_factory(persistence_service)
+    return graph_factory()
 
 
 def get_agent_runtime_service() -> AgentRuntimeService:

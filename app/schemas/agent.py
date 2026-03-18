@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from enum import Enum
+from uuid import UUID
 
 from pydantic import Field, model_validator
 
@@ -57,6 +58,9 @@ class AgentState(SchemaModel):
     calc_warnings: list[CalculationWarningCode] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     final_answer: str | None = None
+    internal_thread_id: UUID | None = None
+    internal_run_id: UUID | None = None
+    run_persisted: bool = False
     status: RunStatus
 
     @model_validator(mode="after")

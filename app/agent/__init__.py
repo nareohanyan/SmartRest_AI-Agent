@@ -11,13 +11,17 @@ from app.agent.report_tools import (
     resolve_scope_tool,
     run_report_tool,
 )
+from app.persistence.runtime_persistence import RuntimePersistenceService
 
 
-def build_agent_graph() -> Any:
+def build_agent_graph(
+    *,
+    persistence_service: RuntimePersistenceService | None = None,
+) -> Any:
     """Lazily import graph runtime to avoid hard dependency at package import time."""
     from app.agent.graph import build_agent_graph as _build_agent_graph
 
-    return _build_agent_graph()
+    return _build_agent_graph(persistence_service=persistence_service)
 
 
 __all__ = [
