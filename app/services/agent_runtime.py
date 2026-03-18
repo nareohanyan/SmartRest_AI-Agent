@@ -75,7 +75,7 @@ class AgentRuntimeService:
             user_question=request.user_question,
             scope_request=ResolveScopeRequest.model_validate(request.scope_request.model_dump()),
             needs_clarification=False,
-            internal_thread_id=start_persistence_result.internal_thread_id,
+            internal_thread_id=start_persistence_result.thread_id,
             internal_run_id=start_persistence_result.internal_run_id,
             status=RunStatus.RUNNING,
         )
@@ -116,26 +116,9 @@ class AgentRuntimeService:
                 category=RuntimeErrorCategory.INTERNAL,
             ) from exc
 
-        finish_persistence_result = self._persistence_service.finish_run(
-            thread_id=start_persistence_result.thread_id,
-            internal_run_id=start_persistence_result.internal_run_id,
-            status=final_state.status,
-            question=final_state.user_question,
-            answer=final_state.final_answer,
-            error_message=(
-                final_state.final_answer
-                if final_state.status is RunStatus.FAILED
-                else None
-            ),
-        )
-        warnings = _merge_warnings(
-            final_state.warnings,
-            start_warnings,
-            finish_persistence_result.warnings,
-        )
         if not final_state.run_persisted:
             finish_persistence_result = self._persistence_service.finish_run(
-                internal_thread_id=start_persistence_result.internal_thread_id,
+                thread_id=start_persistence_result.thread_id,
                 internal_run_id=start_persistence_result.internal_run_id,
                 status=final_state.status,
                 question=final_state.user_question,

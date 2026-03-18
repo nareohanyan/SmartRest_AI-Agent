@@ -228,7 +228,7 @@ def test_runtime_persists_failed_terminal_status_on_internal_error() -> None:
 def test_runtime_skips_fallback_finish_when_graph_reports_persisted() -> None:
     spy = _PersistenceSpy(
         start_result=StartRunPersistenceResult(
-            internal_thread_id=uuid4(),
+            thread_id=uuid4(),
             internal_run_id=uuid4(),
             warnings=["persistence_warning_start"],
         ),

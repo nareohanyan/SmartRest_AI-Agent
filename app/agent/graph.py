@@ -402,7 +402,7 @@ def build_agent_graph(
             return {}
 
         finish_persistence_result = persistence_service.finish_run(
-            internal_thread_id=state.internal_thread_id,
+            thread_id=state.internal_thread_id,
             internal_run_id=state.internal_run_id,
             status=state.status,
             question=state.user_question,
