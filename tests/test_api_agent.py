@@ -7,6 +7,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+import app.agent.graph as graph_module
 from app.api.app import create_app
 from app.api.schemas import AgentRunRequest
 from app.services.agent_runtime import AgentRuntimeExecutionError, get_agent_runtime_service
@@ -22,6 +23,15 @@ def anyio_backend() -> str:
 @pytest.fixture
 def app() -> FastAPI:
     return create_app()
+
+
+def _missing_openai_key() -> Any:
+    raise ValueError("OPENAI_API_KEY is not configured.")
+
+
+@pytest.fixture(autouse=True)
+def _disable_openai_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(graph_module, "get_llm_client", _missing_openai_key)
 
 
 @pytest.fixture

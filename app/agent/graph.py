@@ -10,9 +10,12 @@ from langgraph.graph import END, StateGraph
 
 from app.agent.calc_policy import select_calculation_specs
 from app.agent.calc_tools import compute_metrics_tool
-from app.agent.llm.prompts import (
+from app.agent.llm import (
     CLARIFICATION_FALLBACK_QUESTION,
     InterpretationContractError,
+    build_interpret_request_messages,
+    get_llm_client,
+    parse_interpretation_output_json,
     validate_interpretation_output,
 )
 from app.agent.metrics_mapper import map_report_response_to_base_metrics
@@ -94,6 +97,16 @@ def _generate_interpretation_payload(question: str) -> dict[str, Any]:
     }
 
 
+def _interpret_request_with_llm(
+    question: str,
+    llm_client: Any,
+) -> dict[str, Any]:
+    messages = build_interpret_request_messages(question)
+    output_text = llm_client.generate_text(messages=messages)
+    interpretation = parse_interpretation_output_json(output_text)
+    return interpretation.model_dump(mode="python")
+
+
 def _resolve_scope_node(state: AgentState) -> dict[str, Any]:
     if state.scope_request is None:
         return {
@@ -109,8 +122,14 @@ def _resolve_scope_node(state: AgentState) -> dict[str, Any]:
 
 
 def _interpret_request_node(state: AgentState) -> dict[str, Any]:
-    raw_interpretation = _generate_interpretation_payload(state.user_question)
     try:
+        try:
+            llm_client = get_llm_client()
+        except ValueError:
+            raw_interpretation = _generate_interpretation_payload(state.user_question)
+        else:
+            raw_interpretation = _interpret_request_with_llm(state.user_question, llm_client)
+
         interpretation = validate_interpretation_output(raw_interpretation)
     except InterpretationContractError:
         return {
