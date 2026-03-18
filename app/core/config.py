@@ -26,6 +26,20 @@ class Settings(BaseSettings):
     openai_retry_max_attempts: int = 3
     openai_retry_initial_delay_seconds: float = 0.2
     openai_retry_max_delay_seconds: float = 2.0
+    excel_report_file_path: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SMARTREST_EXCEL_REPORT_FILE_PATH",
+            "EXCEL_REPORT_FILE_PATH",
+        ),
+    )
+    excel_report_sheet_name: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SMARTREST_EXCEL_REPORT_SHEET_NAME",
+            "EXCEL_REPORT_SHEET_NAME",
+        ),
+    )
 
     database_url: str | None = Field(
         default=None,

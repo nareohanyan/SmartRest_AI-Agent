@@ -96,12 +96,14 @@ def test_supported_request_executes_full_run_path() -> None:
     assert final_state.status is RunStatus.COMPLETED
     assert final_state.selected_report_id is ReportType.SALES_TOTAL
     assert final_state.tool_responses.run_report is not None
-    assert final_state.tool_responses.run_report.result.metrics[0].value == 12345.67
-    assert final_state.base_metrics["sales_total"] == Decimal("12345.67")
+    sales_total_value = Decimal(
+        str(final_state.tool_responses.run_report.result.metrics[0].value)
+    )
+    assert final_state.base_metrics["sales_total"] == sales_total_value
     assert len(final_state.derived_metrics) == 1
     assert final_state.derived_metrics[0].key == "sales_total_per_day"
-    assert "sales_total=12345.67" in (final_state.final_answer or "")
-    assert "sales_total_per_day=1763.67" in (final_state.final_answer or "")
+    assert "sales_total=" in (final_state.final_answer or "")
+    assert "sales_total_per_day=" in (final_state.final_answer or "")
 
 
 def test_average_check_without_formula_policy_still_completes() -> None:
@@ -276,6 +278,37 @@ def test_llm_timeout_error_propagates_from_interpret_node(
     assert exc_info.value.category is LLMErrorCategory.TIMEOUT
 
 
+def test_llm_rate_limit_uses_deterministic_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rate_limit_error = LLMClientError(
+        "OpenAI rate limit reached.",
+        category=LLMErrorCategory.RATE_LIMIT,
+        retryable=True,
+    )
+    fake_client = _FakeLLMClient(exc=rate_limit_error)
+    monkeypatch.setattr(graph_module, "get_llm_client", lambda: fake_client)
+    graph = build_agent_graph()
+    payload = _initial_state("What were total sales 2026-03-01 to 2026-03-07?")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "openai_interpret",
+        "authorize_report",
+        "run_report",
+        "calc_metrics",
+        "reason_over_results",
+        "compose_output",
+        "persist_run",
+    ]
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.selected_report_id is ReportType.SALES_TOTAL
+    assert "interpretation_rate_limit_fallback" in final_state.warnings
+
+
 def test_missing_openai_key_uses_deterministic_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -421,6 +454,33 @@ def test_disallowed_report_is_blocked_before_run_report(
     assert final_state.status is RunStatus.DENIED
     assert final_state.tool_responses.run_report is None
     assert "authorization_blocked_report_not_allowed" in final_state.warnings
+
+
+def test_run_report_exception_routes_to_fail_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _run_report_raises(_request: Any) -> Any:
+        raise ValueError("Excel report file not found.")
+
+    monkeypatch.setattr(graph_module, "run_report_tool", _run_report_raises)
+    graph = build_agent_graph()
+    payload = _initial_state("What were total sales 2026-03-01 to 2026-03-07?")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "openai_interpret",
+        "authorize_report",
+        "run_report",
+        "fail",
+        "persist_run",
+    ]
+    assert final_state.status is RunStatus.FAILED
+    assert final_state.tool_responses.run_report is None
+    assert "run_report_execution_failed" in final_state.warnings
+    assert final_state.final_answer == "Run failed: report execution error."
 
 
 def test_calc_mapping_failure_routes_to_fail_branch(

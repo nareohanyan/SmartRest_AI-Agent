@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from app.core.config import get_settings
 from app.reports import (
     REPORT_CATALOG_ORDER,
     get_report_definition,
     list_report_definitions,
     run_mock_report,
 )
+from app.reports.excel_backend import run_excel_report
 from app.schemas.tools import (
     AccessStatus,
     GetReportDefinitionRequest,
@@ -53,5 +57,15 @@ def get_report_definition_tool(
 
 def run_report_tool(request: RunReportRequest) -> RunReportResponse:
     """Execute a deterministic mock report using validated request payload."""
+    settings = get_settings()
+    excel_path = settings.excel_report_file_path
+    if excel_path and excel_path.strip():
+        path = Path(excel_path)
+        if not path.exists():
+            raise ValueError(f"Excel report file not found: {path}")
+        return run_excel_report(
+            request.request,
+            file_path=path,
+            sheet_name=settings.excel_report_sheet_name,
+        )
     return run_mock_report(request.request)
-

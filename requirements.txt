@@ -13,3 +13,6 @@ mypy==1.19.1
 pre-commit==3.8.0
 pytest==8.4.2
 ruff==0.15.5
+
+# for testing excel data
+openpyxl==3.1.5

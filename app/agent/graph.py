@@ -13,6 +13,7 @@ from app.agent.calc_tools import compute_metrics_tool
 from app.agent.llm import (
     CLARIFICATION_FALLBACK_QUESTION,
     InterpretationContractError,
+    LLMClientError,
     build_interpret_request_messages,
     get_llm_client,
     parse_interpretation_output_json,
@@ -21,13 +22,14 @@ from app.agent.llm import (
 from app.agent.metrics_mapper import map_report_response_to_base_metrics
 from app.agent.report_tools import resolve_scope_tool, run_report_tool
 from app.persistence.runtime_persistence import RuntimePersistenceService
-from app.schemas.agent import AgentState, IntentType, RunStatus
+from app.schemas.agent import AgentState, IntentType, LLMErrorCategory, RunStatus
 from app.schemas.calculations import ComputeMetricsRequest
 from app.schemas.reports import ReportFilters, ReportRequest, ReportType
 from app.schemas.tools import AccessStatus, RunReportRequest
 
 _DATE_RANGE_PATTERN = re.compile(r"(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})")
 _AUTHORIZATION_BLOCKED_WARNING = "authorization_blocked_report_not_allowed"
+_INTERPRET_RATE_LIMIT_FALLBACK_WARNING = "interpretation_rate_limit_fallback"
 
 
 def _detect_report_id(question: str) -> ReportType | None:
@@ -124,13 +126,20 @@ def _resolve_scope_node(state: AgentState) -> dict[str, Any]:
 
 
 def _openai_interpret_node(state: AgentState) -> dict[str, Any]:
+    warnings = [*state.warnings]
     try:
         try:
             llm_client = get_llm_client()
         except ValueError:
             raw_interpretation = _generate_interpretation_payload(state.user_question)
         else:
-            raw_interpretation = _interpret_request_with_llm(state.user_question, llm_client)
+            try:
+                raw_interpretation = _interpret_request_with_llm(state.user_question, llm_client)
+            except LLMClientError as exc:
+                if exc.category is not LLMErrorCategory.RATE_LIMIT:
+                    raise
+                raw_interpretation = _generate_interpretation_payload(state.user_question)
+                warnings.append(_INTERPRET_RATE_LIMIT_FALLBACK_WARNING)
 
         interpretation = validate_interpretation_output(raw_interpretation)
     except InterpretationContractError:
@@ -140,7 +149,7 @@ def _openai_interpret_node(state: AgentState) -> dict[str, Any]:
             "filters": None,
             "needs_clarification": True,
             "clarification_question": CLARIFICATION_FALLBACK_QUESTION,
-            "warnings": [*state.warnings, "interpretation_contract_invalid"],
+            "warnings": [*warnings, "interpretation_contract_invalid"],
         }
 
     return {
@@ -149,6 +158,7 @@ def _openai_interpret_node(state: AgentState) -> dict[str, Any]:
         "filters": interpretation.filters,
         "needs_clarification": interpretation.needs_clarification,
         "clarification_question": interpretation.clarification_question,
+        "warnings": warnings,
     }
 
 
@@ -214,7 +224,14 @@ def _run_report_node(state: AgentState) -> dict[str, Any]:
             filters=state.filters,
         ),
     )
-    run_response = run_report_tool(run_request)
+    try:
+        run_response = run_report_tool(run_request)
+    except Exception:
+        return {
+            "status": RunStatus.FAILED,
+            "final_answer": "Run failed: report execution error.",
+            "warnings": [*state.warnings, "run_report_execution_failed"],
+        }
 
     tool_responses = state.tool_responses.model_copy(deep=True)
     tool_responses.run_report = run_response
