@@ -48,7 +48,7 @@ class AgentRuntimeService:
         self._persistence_service = persistence_service or get_runtime_persistence_service()
 
     def run(self, request: AgentRunRequest) -> AgentRunResponse:
-        run_id = uuid4().hex
+        run_id = uuid4()
         initial_state = AgentState(
             thread_id=request.thread_id,
             run_id=run_id,
@@ -59,12 +59,12 @@ class AgentRuntimeService:
         )
 
         start_persistence_result = self._persistence_service.start_run(
-            external_thread_id=request.thread_id,
+            thread_id=request.thread_id,
             user_id=request.scope_request.user_id,
             profile_id=request.scope_request.profile_id,
             profile_nick=request.scope_request.profile_nick,
             intent=None,
-            metadata_json={"external_thread_id": request.thread_id},
+            metadata_json={"thread_id": str(request.thread_id)},
         )
         start_warnings = start_persistence_result.warnings
 
@@ -74,7 +74,7 @@ class AgentRuntimeService:
             final_state = AgentState.model_validate(runtime_output)
         except LLMClientError as exc:
             self._persistence_service.finish_run(
-                internal_thread_id=start_persistence_result.internal_thread_id,
+                thread_id=start_persistence_result.thread_id,
                 internal_run_id=start_persistence_result.internal_run_id,
                 status=RunStatus.FAILED,
                 question=request.user_question,
@@ -88,7 +88,7 @@ class AgentRuntimeService:
             ) from exc
         except Exception as exc:
             self._persistence_service.finish_run(
-                internal_thread_id=start_persistence_result.internal_thread_id,
+                thread_id=start_persistence_result.thread_id,
                 internal_run_id=start_persistence_result.internal_run_id,
                 status=RunStatus.FAILED,
                 question=request.user_question,
@@ -102,7 +102,7 @@ class AgentRuntimeService:
             ) from exc
 
         finish_persistence_result = self._persistence_service.finish_run(
-            internal_thread_id=start_persistence_result.internal_thread_id,
+            thread_id=start_persistence_result.thread_id,
             internal_run_id=start_persistence_result.internal_run_id,
             status=final_state.status,
             question=final_state.user_question,

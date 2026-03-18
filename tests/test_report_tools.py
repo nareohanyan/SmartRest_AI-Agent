@@ -23,10 +23,10 @@ from app.schemas.tools import (
 )
 
 
-def _identity_payload() -> dict[str, str]:
+def _identity_payload() -> dict[str, int | str]:
     return {
-        "user_id": "u-123",
-        "profile_id": "p-456",
+        "user_id": 123,
+        "profile_id": 456,
         "profile_nick": "ChefNick",
     }
 
@@ -173,4 +173,3 @@ def test_run_report_source_filter_not_supported_for_sales_total_fails() -> None:
 
     with pytest.raises(ValueError, match="Source filter is not supported"):
         run_report_tool(request)
-

@@ -11,10 +11,8 @@ from sqlalchemy.orm import Session
 from app.db.analytics import get_chat_analytics_session_factory
 from app.persistence.chat_analytics_repository import ChatAnalyticsRepository
 from app.persistence.errors import PersistenceNotFoundError, PersistenceValidationError
-from app.persistence.thread_id_mapper import to_internal_thread_uuid
 from app.schemas.agent import RunStatus
 
-PERSISTENCE_WARNING_INVALID_THREAD_ID = "persistence_invalid_thread_id"
 PERSISTENCE_WARNING_INVALID_IDENTITY = "persistence_invalid_identity"
 PERSISTENCE_WARNING_INVALID_INPUT = "persistence_invalid_input"
 PERSISTENCE_WARNING_NOT_FOUND = "persistence_not_found"
@@ -24,7 +22,7 @@ PERSISTENCE_WARNING_UNAVAILABLE = "persistence_unavailable"
 
 @dataclass(frozen=True)
 class StartRunPersistenceResult:
-    internal_thread_id: UUID | None = None
+    thread_id: UUID | None = None
     internal_run_id: UUID | None = None
     warnings: list[str] = field(default_factory=list)
 
@@ -70,7 +68,7 @@ class RuntimePersistenceService:
     def start_run(
         self,
         *,
-        external_thread_id: str,
+        thread_id: UUID,
         user_id: int | str,
         profile_id: int | str,
         profile_nick: str,
@@ -78,13 +76,6 @@ class RuntimePersistenceService:
         title: str | None = None,
         metadata_json: dict[str, Any] | None = None,
     ) -> StartRunPersistenceResult:
-        try:
-            internal_thread_id = to_internal_thread_uuid(external_thread_id)
-        except PersistenceValidationError:
-            return StartRunPersistenceResult(
-                warnings=[PERSISTENCE_WARNING_INVALID_THREAD_ID],
-            )
-
         if not self._is_integer_like(user_id) or not self._is_integer_like(profile_id):
             return StartRunPersistenceResult(warnings=[PERSISTENCE_WARNING_INVALID_IDENTITY])
 
@@ -95,7 +86,7 @@ class RuntimePersistenceService:
         try:
             repository = self._repository_factory(session)
             thread = repository.get_or_create_thread(
-                thread_id=internal_thread_id,
+                thread_id=thread_id,
                 user_id=user_id,
                 profile_id=profile_id,
                 profile_nick=profile_nick,
@@ -111,7 +102,7 @@ class RuntimePersistenceService:
             )
             session.commit()
             return StartRunPersistenceResult(
-                internal_thread_id=cast(UUID, thread.id),
+                thread_id=cast(UUID, thread.id),
                 internal_run_id=cast(UUID, run.id),
             )
         except PersistenceValidationError:
@@ -126,7 +117,7 @@ class RuntimePersistenceService:
     def finish_run(
         self,
         *,
-        internal_thread_id: UUID | None,
+        thread_id: UUID | None,
         internal_run_id: UUID | None,
         status: RunStatus,
         question: str,
@@ -134,7 +125,7 @@ class RuntimePersistenceService:
         error_message: str | None = None,
         error_code: str | None = None,
     ) -> FinishRunPersistenceResult:
-        if internal_thread_id is None or internal_run_id is None:
+        if thread_id is None or internal_run_id is None:
             return FinishRunPersistenceResult(warnings=[PERSISTENCE_WARNING_MISSING_CONTEXT])
 
         try:
@@ -150,7 +141,7 @@ class RuntimePersistenceService:
                 error_code=error_code,
             )
             repository.write_message(
-                thread_id=internal_thread_id,
+                thread_id=thread_id,
                 run_id=internal_run_id,
                 question=question,
                 answer=answer,

@@ -48,8 +48,8 @@ def _default_to_missing_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
 def _scope_request_payload(*, deny: bool = False) -> dict[str, object]:
     metadata: dict[str, str] = {"access": "deny"} if deny else {}
     return {
-        "user_id": "u-1",
-        "profile_id": "p-1",
+        "user_id": 101,
+        "profile_id": 201,
         "profile_nick": "Nick",
         "metadata": metadata,
     }
@@ -57,8 +57,8 @@ def _scope_request_payload(*, deny: bool = False) -> dict[str, object]:
 
 def _initial_state(question: str, *, deny_scope: bool = False) -> dict[str, object]:
     return {
-        "thread_id": "thread-1",
-        "run_id": "run-1",
+        "thread_id": "11111111-1111-1111-1111-111111111111",
+        "run_id": "22222222-2222-2222-2222-222222222222",
         "user_question": question,
         "scope_request": _scope_request_payload(deny=deny_scope),
         "needs_clarification": False,
