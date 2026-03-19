@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from datetime import date
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -13,6 +14,7 @@ import pytest
 import app.agent.graph as graph_module
 from app.agent.graph import build_agent_graph
 from app.agent.llm.exceptions import LLMClientError
+from app.core.config import get_settings
 from app.persistence.runtime_persistence import FinishRunPersistenceResult
 from app.schemas.agent import AgentState, LLMErrorCategory, RunStatus
 from app.schemas.reports import ReportType
@@ -106,6 +108,60 @@ def test_supported_request_executes_full_run_path() -> None:
     assert "sales_total_per_day=" in (final_state.final_answer or "")
 
 
+def test_multi_intent_request_returns_structured_multi_block_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SMARTREST_EXCEL_REPORT_FILE_PATH", "")
+    monkeypatch.setenv("EXCEL_REPORT_FILE_PATH", "")
+    get_settings.cache_clear()
+    try:
+        graph = build_agent_graph()
+        payload = _initial_state("Show top locations and total sales 2026-03-01 to 2026-03-07.")
+
+        final_state = AgentState.model_validate(graph.invoke(payload))
+        order = _node_order(graph, payload)
+
+        assert order == [
+            "resolve_scope",
+            "openai_interpret",
+            "authorize_report",
+            "run_report",
+            "calc_metrics",
+            "reason_over_results",
+            "compose_output",
+            "persist_run",
+        ]
+        assert final_state.status is RunStatus.COMPLETED
+        assert len(final_state.additional_run_reports) == 1
+        assert final_state.final_answer is not None
+        assert "Multi-report response:" in final_state.final_answer
+        assert "\n1. " in final_state.final_answer
+        assert "\n2. " in final_state.final_answer
+    finally:
+        get_settings.cache_clear()
+
+
+def test_top_n_slot_limits_display_for_ranked_reports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SMARTREST_EXCEL_REPORT_FILE_PATH", "")
+    monkeypatch.setenv("EXCEL_REPORT_FILE_PATH", "")
+    get_settings.cache_clear()
+    try:
+        graph = build_agent_graph()
+        payload = _initial_state("Show top 2 locations 2026-03-01 to 2026-03-07.")
+
+        final_state = AgentState.model_validate(graph.invoke(payload))
+
+        assert final_state.status is RunStatus.COMPLETED
+        assert final_state.selected_report_id is ReportType.TOP_LOCATIONS
+        assert final_state.requested_top_n == 2
+        assert final_state.final_answer is not None
+        assert final_state.final_answer.count("=") == 2
+    finally:
+        get_settings.cache_clear()
+
+
 def test_average_check_without_formula_policy_still_completes() -> None:
     graph = build_agent_graph()
     payload = _initial_state("What was average check 2026-03-01 to 2026-03-07?")
@@ -129,6 +185,43 @@ def test_average_check_without_formula_policy_still_completes() -> None:
     assert "calc_no_formulas_selected" in final_state.warnings
 
 
+def test_completed_answer_is_localized_for_armenian_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _armenian_interpretation(_question: str) -> dict[str, object]:
+        return {
+            "intent": "get_kpi",
+            "report_id": "sales_total",
+            "filters": {"date_from": "2026-03-01", "date_to": "2026-03-07"},
+            "needs_clarification": False,
+            "clarification_question": None,
+            "confidence": 0.95,
+            "reasoning_notes": "Armenian localization path.",
+        }
+
+    monkeypatch.setattr(graph_module, "_generate_interpretation_payload", _armenian_interpretation)
+    graph = build_agent_graph()
+    payload = _initial_state("Ընդհանուր վաճառքը 2026-03-01 to 2026-03-07?")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.final_answer is not None
+    assert "Հաշվետվություն" in final_state.final_answer
+    assert "ընդհանուր վաճառք=" in final_state.final_answer
+
+
+def test_rejected_answer_is_localized_for_russian_question() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state("Покажи тренд зарплат 2026-03-01 to 2026-03-07.")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+
+    assert final_state.status is RunStatus.REJECTED
+    assert final_state.final_answer is not None
+    assert final_state.final_answer.startswith("Неподдерживаемый запрос")
+
+
 def test_missing_date_routes_to_clarify_without_report_execution() -> None:
     graph = build_agent_graph()
     payload = _initial_state("What were total sales?")
@@ -147,6 +240,60 @@ def test_missing_date_routes_to_clarify_without_report_execution() -> None:
     assert final_state.needs_clarification is True
     assert final_state.tool_responses.run_report is None
     assert "date range" in (final_state.final_answer or "").lower()
+
+
+def test_extract_filters_supports_today(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(graph_module, "_today", lambda: date(2026, 3, 19))
+
+    filters = graph_module._extract_filters("What were total sales today?")
+
+    assert filters is not None
+    assert filters.date_from == date(2026, 3, 19)
+    assert filters.date_to == date(2026, 3, 19)
+
+
+def test_extract_filters_supports_previous_week(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(graph_module, "_today", lambda: date(2026, 3, 19))
+
+    filters = graph_module._extract_filters("Show order count previous week.")
+
+    assert filters is not None
+    assert filters.date_from == date(2026, 3, 9)
+    assert filters.date_to == date(2026, 3, 15)
+
+
+def test_extract_filters_supports_last_three_years(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(graph_module, "_today", lambda: date(2026, 3, 19))
+
+    filters = graph_module._extract_filters("Show gross profit for last 3 years.")
+
+    assert filters is not None
+    assert filters.date_from == date(2024, 1, 1)
+    assert filters.date_to == date(2026, 3, 19)
+
+
+def test_extract_filters_supports_russian_relative_period(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(graph_module, "_today", lambda: date(2026, 3, 19))
+
+    filters = graph_module._extract_filters("Покажи продажи за прошлый месяц.")
+
+    assert filters is not None
+    assert filters.date_from == date(2026, 2, 1)
+    assert filters.date_to == date(2026, 2, 28)
+
+
+def test_extract_filters_supports_armenian_relative_period(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(graph_module, "_today", lambda: date(2026, 3, 19))
+
+    filters = graph_module._extract_filters("Ցույց տուր վաճառքը այս տարի։")
+
+    assert filters is not None
+    assert filters.date_from == date(2026, 1, 1)
+    assert filters.date_to == date(2026, 3, 19)
 
 
 @pytest.mark.parametrize(
@@ -244,7 +391,7 @@ def test_malformed_llm_output_routes_to_fallback_clarify(
     fake_client = _FakeLLMClient(output_text='{"intent": "get_kpi"}')
     monkeypatch.setattr(graph_module, "get_llm_client", lambda: fake_client)
     graph = build_agent_graph()
-    payload = _initial_state("What were total sales 2026-03-01 to 2026-03-07?")
+    payload = _initial_state("Show KPI snapshot 2026-03-01 to 2026-03-07.")
 
     final_state = AgentState.model_validate(graph.invoke(payload))
     order = _node_order(graph, payload)
@@ -273,7 +420,7 @@ def test_llm_timeout_error_propagates_from_interpret_node(
     graph = build_agent_graph()
 
     with pytest.raises(LLMClientError) as exc_info:
-        graph.invoke(_initial_state("What were total sales 2026-03-01 to 2026-03-07?"))
+        graph.invoke(_initial_state("Show KPI snapshot 2026-03-01 to 2026-03-07."))
 
     assert exc_info.value.category is LLMErrorCategory.TIMEOUT
 
@@ -289,7 +436,7 @@ def test_llm_rate_limit_uses_deterministic_fallback(
     fake_client = _FakeLLMClient(exc=rate_limit_error)
     monkeypatch.setattr(graph_module, "get_llm_client", lambda: fake_client)
     graph = build_agent_graph()
-    payload = _initial_state("What were total sales 2026-03-01 to 2026-03-07?")
+    payload = _initial_state("Show KPI snapshot 2026-03-01 to 2026-03-07.")
 
     final_state = AgentState.model_validate(graph.invoke(payload))
     order = _node_order(graph, payload)
@@ -298,14 +445,10 @@ def test_llm_rate_limit_uses_deterministic_fallback(
         "resolve_scope",
         "openai_interpret",
         "authorize_report",
-        "run_report",
-        "calc_metrics",
-        "reason_over_results",
-        "compose_output",
+        "reject",
         "persist_run",
     ]
-    assert final_state.status is RunStatus.COMPLETED
-    assert final_state.selected_report_id is ReportType.SALES_TOTAL
+    assert final_state.status is RunStatus.REJECTED
     assert "interpretation_rate_limit_fallback" in final_state.warnings
 
 
@@ -338,6 +481,23 @@ def test_missing_openai_key_uses_deterministic_fallback(
     assert fallback_called is True
     assert final_state.status is RunStatus.COMPLETED
     assert final_state.selected_report_id is ReportType.SALES_TOTAL
+
+
+def test_unambiguous_request_skips_llm_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _llm_must_not_be_called() -> Any:
+        raise AssertionError("LLM should not be called for deterministic requests.")
+
+    monkeypatch.setattr(graph_module, "get_llm_client", _llm_must_not_be_called)
+    graph = build_agent_graph()
+    payload = _initial_state("What were total sales 2026-03-01 to 2026-03-07?")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.selected_report_id is ReportType.SALES_TOTAL
+    assert "interpretation_rate_limit_fallback" not in final_state.warnings
 
 
 def test_invalid_interpretation_output_routes_to_fallback_clarify(
@@ -514,8 +674,28 @@ def test_persist_run_node_executes_finish_when_persistence_service_is_provided()
         def __init__(self) -> None:
             self.finish_calls: list[dict[str, Any]] = []
 
-        def finish_run(self, **kwargs: Any) -> FinishRunPersistenceResult:
-            self.finish_calls.append(kwargs)
+        def finish_run(
+            self,
+            *,
+            thread_id: Any,
+            internal_run_id: Any,
+            status: RunStatus,
+            question: str,
+            answer: str | None,
+            error_message: str | None = None,
+            error_code: str | None = None,
+        ) -> FinishRunPersistenceResult:
+            self.finish_calls.append(
+                {
+                    "thread_id": thread_id,
+                    "internal_run_id": internal_run_id,
+                    "status": status,
+                    "question": question,
+                    "answer": answer,
+                    "error_message": error_message,
+                    "error_code": error_code,
+                }
+            )
             return FinishRunPersistenceResult(warnings=["persistence_warning_finish"])
 
     spy = _PersistenceSpy()

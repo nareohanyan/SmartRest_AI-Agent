@@ -167,7 +167,7 @@ def test_report_contracts_valid_payloads() -> None:
 def test_report_contract_invalid_report_id_fails() -> None:
     with pytest.raises(ValidationError) as exc_info:
         ReportRequest.model_validate(
-            {"report_id": "gross_profit", "filters": _filters_payload()}
+            {"report_id": "menu_mix", "filters": _filters_payload()}
         )
 
     assert any(

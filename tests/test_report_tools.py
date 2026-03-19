@@ -12,6 +12,7 @@ from app.agent.report_tools import (
     resolve_scope_tool,
     run_report_tool,
 )
+from app.core.config import get_settings
 from app.reports import MOCK_BACKEND_WARNING, REPORT_CATALOG_ORDER
 from app.schemas.reports import ReportFilters, ReportRequest, ReportType
 from app.schemas.tools import (
@@ -21,6 +22,17 @@ from app.schemas.tools import (
     ResolveScopeRequest,
     RunReportRequest,
 )
+
+
+@pytest.fixture(autouse=True)
+def _force_mock_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMARTREST_EXCEL_REPORT_FILE_PATH", "")
+    monkeypatch.setenv("EXCEL_REPORT_FILE_PATH", "")
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        get_settings.cache_clear()
 
 
 def _identity_payload() -> dict[str, int | str]:
@@ -173,3 +185,41 @@ def test_run_report_source_filter_not_supported_for_sales_total_fails() -> None:
 
     with pytest.raises(ValueError, match="Source filter is not supported"):
         run_report_tool(request)
+
+
+@pytest.mark.parametrize(
+    ("report_id", "expected_label"),
+    [
+        (ReportType.SALES_BY_COURIER, "azat"),
+        (ReportType.TOP_LOCATIONS, "kasakh_andraniki_29"),
+        (ReportType.TOP_CUSTOMERS, "094727202"),
+        (ReportType.REPEAT_CUSTOMER_RATE, "repeat_customer_rate_percent"),
+        (ReportType.DELIVERY_FEE_ANALYTICS, "delivery_fee_total"),
+        (ReportType.PAYMENT_COLLECTION, "collection_rate_percent"),
+        (ReportType.OUTSTANDING_BALANCE, "outstanding_balance"),
+        (ReportType.DAILY_SALES_TREND, "2026-03-01"),
+        (ReportType.DAILY_ORDER_TREND, "2026-03-01"),
+        (ReportType.SALES_BY_WEEKDAY, "monday"),
+        (ReportType.GROSS_PROFIT, "gross_profit"),
+        (ReportType.LOCATION_CONCENTRATION, "top_10_location_share_percent"),
+    ],
+)
+def test_run_report_extended_scopes_return_metrics(
+    report_id: ReportType,
+    expected_label: str,
+) -> None:
+    request = RunReportRequest(
+        **_identity_payload(),
+        request=ReportRequest(
+            report_id=report_id,
+            filters=ReportFilters(
+                date_from=date(2026, 3, 1),
+                date_to=date(2026, 3, 7),
+            ),
+        ),
+    )
+
+    response = run_report_tool(request)
+
+    labels = [metric.label for metric in response.result.metrics]
+    assert expected_label in labels

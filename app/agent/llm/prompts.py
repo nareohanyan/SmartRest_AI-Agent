@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -19,11 +20,27 @@ Domain scope (supported reports only):
 - order_count
 - average_check
 - sales_by_source
+- sales_by_courier
+- top_locations
+- top_customers
+- repeat_customer_rate
+- delivery_fee_analytics
+- payment_collection
+- outstanding_balance
+- daily_sales_trend
+- daily_order_trend
+- sales_by_weekday
+- gross_profit
+- location_concentration
 
 Return only one valid JSON object with this exact shape:
 {
   "intent": "get_kpi" | "breakdown_kpi" | "needs_clarification" | "unsupported_request",
-  "report_id": "sales_total" | "order_count" | "average_check" | "sales_by_source" | null,
+  "report_id": "sales_total" | "order_count" | "average_check" | "sales_by_source" |
+               "sales_by_courier" | "top_locations" | "top_customers" |
+               "repeat_customer_rate" | "delivery_fee_analytics" | "payment_collection" |
+               "outstanding_balance" | "daily_sales_trend" | "daily_order_trend" |
+               "sales_by_weekday" | "gross_profit" | "location_concentration" | null,
   "filters": {"date_from": "YYYY-MM-DD", "date_to": "YYYY-MM-DD", "source": "..."} | null,
   "needs_clarification": boolean,
   "clarification_question": string | null,
@@ -38,7 +55,9 @@ Interpretation policy:
 - If the question implies "by source" breakdown, use report_id "sales_by_source" and intent
   "breakdown_kpi".
 - Use "source" filter only for report_id "sales_by_source".
-- If date range is not explicit as YYYY-MM-DD to YYYY-MM-DD, ask clarification.
+- If user provides a relative period (today, yesterday, this/last week, this/last month,
+  this/last year, last N days/weeks/months/years), resolve to concrete date_from/date_to.
+- Ask clarification only when no executable time window can be inferred.
 - Never invent unsupported metrics, report IDs, or filter keys.
 
 Confidence policy:
@@ -52,7 +71,8 @@ Output rules:
 """.strip()
 
 CLARIFICATION_FALLBACK_QUESTION = (
-    "Please clarify your request with report type and date range (YYYY-MM-DD to YYYY-MM-DD)."
+    "Please clarify your request with report type and either an explicit date range "
+    "(YYYY-MM-DD to YYYY-MM-DD) or a relative period (today, last week, last 3 months)."
 )
 
 
@@ -102,8 +122,27 @@ class InterpretationOutput(SchemaModel):
 
 
 def build_interpret_request_messages(user_question: str) -> list[dict[str, str]]:
+    if re.search(r"[\u0531-\u0556\u0561-\u0587]", user_question):
+        language_name = "Armenian"
+    elif re.search(r"[\u0400-\u04FF]", user_question):
+        language_name = "Russian"
+    else:
+        language_name = "English"
+
+    language_instruction = (
+        "Language policy:\n"
+        f'- The user question language is "{language_name}".\n'
+        "- Keep JSON structure, enum values, report_id values, and filter keys "
+        "exactly in English.\n"
+        f'- Write only human-facing text fields ("clarification_question", "reasoning_notes") in '
+        f'"{language_name}".'
+    )
+
     return [
-        {"role": "system", "content": INTERPRET_REQUEST_SYSTEM_PROMPT},
+        {
+            "role": "system",
+            "content": f"{INTERPRET_REQUEST_SYSTEM_PROMPT}\n\n{language_instruction}",
+        },
         {"role": "user", "content": user_question},
     ]
 

@@ -49,10 +49,16 @@ class AgentState(SchemaModel):
     user_scope: ResolveScopeResponse | None = None
     intent: IntentType | None = None
     selected_report_id: ReportType | None = None
+    additional_report_ids: list[ReportType] = Field(default_factory=list)
     filters: ReportFilters | None = None
+    requested_top_n: int | None = Field(default=None, ge=1, le=50)
+    slot_group_by: str | None = None
+    slot_metric: str | None = None
+    slot_entity: str | None = None
     needs_clarification: bool
     clarification_question: str | None = None
     tool_responses: ToolResponses = Field(default_factory=ToolResponses)
+    additional_run_reports: list[RunReportResponse] = Field(default_factory=list)
     base_metrics: dict[str, Decimal] = Field(default_factory=dict)
     derived_metrics: list[DerivedMetric] = Field(default_factory=list)
     calc_warnings: list[CalculationWarningCode] = Field(default_factory=list)

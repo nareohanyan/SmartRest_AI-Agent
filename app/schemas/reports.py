@@ -13,6 +13,18 @@ class ReportType(str, Enum):
     ORDER_COUNT = "order_count"
     AVERAGE_CHECK = "average_check"
     SALES_BY_SOURCE = "sales_by_source"
+    SALES_BY_COURIER = "sales_by_courier"
+    TOP_LOCATIONS = "top_locations"
+    TOP_CUSTOMERS = "top_customers"
+    REPEAT_CUSTOMER_RATE = "repeat_customer_rate"
+    DELIVERY_FEE_ANALYTICS = "delivery_fee_analytics"
+    PAYMENT_COLLECTION = "payment_collection"
+    OUTSTANDING_BALANCE = "outstanding_balance"
+    DAILY_SALES_TREND = "daily_sales_trend"
+    DAILY_ORDER_TREND = "daily_order_trend"
+    SALES_BY_WEEKDAY = "sales_by_weekday"
+    GROSS_PROFIT = "gross_profit"
+    LOCATION_CONCENTRATION = "location_concentration"
 
 
 class ReportFilterKey(str, Enum):

@@ -17,7 +17,22 @@ def test_build_interpret_request_messages_returns_system_and_user_entries() -> N
 
     assert len(messages) == 2
     assert messages[0]["role"] == "system"
+    assert 'The user question language is "English".' in messages[0]["content"]
     assert messages[1] == {"role": "user", "content": "What were total sales yesterday?"}
+
+
+def test_build_interpret_request_messages_adds_armenian_language_policy() -> None:
+    messages = build_interpret_request_messages("Ընդհանուր վաճառքը 2024-07-12 to 2024-07-20?")
+
+    assert messages[0]["role"] == "system"
+    assert 'The user question language is "Armenian".' in messages[0]["content"]
+
+
+def test_build_interpret_request_messages_adds_russian_language_policy() -> None:
+    messages = build_interpret_request_messages("Покажи общие продажи 2024-07-12 to 2024-07-20.")
+
+    assert messages[0]["role"] == "system"
+    assert 'The user question language is "Russian".' in messages[0]["content"]
 
 
 def test_validate_interpretation_output_accepts_valid_supported_payload() -> None:
