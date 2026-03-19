@@ -21,6 +21,7 @@ from app.schemas.tools import (
 class IntentType(str, Enum):
     GET_KPI = "get_kpi"
     BREAKDOWN_KPI = "breakdown_kpi"
+    SMALL_TALK = "small_talk"
     NEEDS_CLARIFICATION = "needs_clarification"
     UNSUPPORTED_REQUEST = "unsupported_request"
 

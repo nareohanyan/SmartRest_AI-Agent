@@ -54,6 +54,10 @@ _LOCALIZED_MESSAGES: dict[str, dict[str, str]] = {
             "customers, locations, delivery fees, payments, balances, weekday and daily trends, "
             "and gross-profit analytics."
         ),
+        "small_talk_response": (
+            "Hi. I can help with restaurant analytics. "
+            "Ask about sales, orders, customers, locations, payments, or trends."
+        ),
         "access_denied_request": "Access denied for this request.",
         "run_failed_internal": "Run failed due to internal processing error.",
         "run_failed_missing_context": "Run failed: missing required report execution context.",
@@ -74,6 +78,10 @@ _LOCALIZED_MESSAGES: dict[str, dict[str, str]] = {
             "Չաջակցվող հարցում։ Աջակցվում են վաճառք, աղբյուրներ, առաքիչներ, "
             "հաճախորդներ, հասցեներ, առաքման վճար, վճարումներ, մնացորդ, "
             "օրական և շաբաթվա տրենդեր, ինչպես նաև համախառն շահույթի վերլուծություն։"
+        ),
+        "small_talk_response": (
+            "Բարև։ Կարող եմ օգնել ռեստորանի վերլուծություններով։ "
+            "Հարցրեք վաճառքի, պատվերների, հաճախորդների, հասցեների, վճարումների կամ տրենդերի մասին։"
         ),
         "access_denied_request": "Այս հարցման համար մուտքը մերժված է։",
         "run_failed_internal": "Կատարման ձախողում՝ ներքին սխալի պատճառով։",
@@ -102,6 +110,10 @@ _LOCALIZED_MESSAGES: dict[str, dict[str, str]] = {
             "Неподдерживаемый запрос. Поддерживаются аналитика продаж, источников, "
             "курьеров, клиентов, локаций, доставки, оплат, задолженности, "
             "дневных/недельных трендов и валовой прибыли."
+        ),
+        "small_talk_response": (
+            "Привет. Я могу помочь с аналитикой ресторана. "
+            "Спросите про продажи, заказы, клиентов, локации, оплаты или тренды."
         ),
         "access_denied_request": "Доступ к этому запросу запрещен.",
         "run_failed_internal": "Выполнение не удалось из-за внутренней ошибки.",
@@ -637,6 +649,58 @@ def _detect_report_id(question: str) -> ReportType | None:
     return primary
 
 
+def _has_explicit_or_relative_time_signal(question: str) -> bool:
+    return _DATE_RANGE_PATTERN.search(question) is not None or _extract_relative_filters(
+        question,
+        today=_today(),
+    ) is not None
+
+
+def _contains_text_term(text: str, term: str) -> bool:
+    return re.search(rf"(?<!\w){re.escape(term)}(?!\w)", text) is not None
+
+
+def _is_small_talk(question: str) -> bool:
+    text = question.lower()
+    if _detect_report_id(text) is not None:
+        return False
+    if _has_explicit_or_relative_time_signal(text):
+        return False
+
+    small_talk_terms = (
+        "hi",
+        "hello",
+        "hey",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "how are you",
+        "thanks",
+        "thank you",
+        "thx",
+        "yo",
+        "sup",
+        "привет",
+        "здравствуйте",
+        "доброе утро",
+        "добрый день",
+        "добрый вечер",
+        "как дела",
+        "спасибо",
+        "thanks a lot",
+        "barev",
+        "բարև",
+        "բարեւ",
+        "ողջույն",
+        "բարի լույս",
+        "բարի օր",
+        "ինչպես ես",
+        "շնորհակալ",
+        "շնորհակալություն",
+    )
+    return any(_contains_text_term(text, term) for term in small_talk_terms)
+
+
 def _today() -> date:
     return date.today()
 
@@ -828,6 +892,17 @@ def _extract_filters(question: str) -> ReportFilters | None:
 
 
 def _generate_interpretation_payload(question: str) -> dict[str, Any]:
+    if _is_small_talk(question):
+        return {
+            "intent": IntentType.SMALL_TALK,
+            "report_id": None,
+            "filters": None,
+            "needs_clarification": False,
+            "clarification_question": None,
+            "confidence": 0.98,
+            "reasoning_notes": "Deterministic small-talk classification.",
+        }
+
     selected_report_id = _detect_report_id(question)
     slots = _extract_query_slots(question)
     if selected_report_id is None:
@@ -962,7 +1037,11 @@ def _openai_interpret_node(state: AgentState) -> dict[str, Any]:
         for report_id in additional_report_ids
         if report_id is not interpretation.report_id
     ]
-    if interpretation.intent in {IntentType.NEEDS_CLARIFICATION, IntentType.UNSUPPORTED_REQUEST}:
+    if interpretation.intent in {
+        IntentType.NEEDS_CLARIFICATION,
+        IntentType.UNSUPPORTED_REQUEST,
+        IntentType.SMALL_TALK,
+    }:
         additional_report_ids = []
 
     return {
@@ -984,6 +1063,9 @@ def _openai_interpret_node(state: AgentState) -> dict[str, Any]:
 def _authorize_report_node(state: AgentState) -> dict[str, Any]:
     if state.user_scope is None or state.user_scope.status is AccessStatus.DENIED:
         return {"status": RunStatus.DENIED}
+
+    if state.intent is IntentType.SMALL_TALK:
+        return {"status": RunStatus.COMPLETED}
 
     if state.needs_clarification or state.intent is IntentType.NEEDS_CLARIFICATION:
         question = _localized_clarification_question(state)
@@ -1020,6 +1102,8 @@ def _authorize_report_node(state: AgentState) -> dict[str, Any]:
 
 
 def _select_authorization_route(state: AgentState) -> str:
+    if state.status is RunStatus.COMPLETED and state.intent is IntentType.SMALL_TALK:
+        return "small_talk"
     if state.status is RunStatus.DENIED:
         return "deny"
     if state.status is RunStatus.CLARIFY:
@@ -1181,6 +1265,13 @@ def _clarify_node(state: AgentState) -> dict[str, Any]:
     }
 
 
+def _small_talk_node(state: AgentState) -> dict[str, Any]:
+    return {
+        "status": RunStatus.COMPLETED,
+        "final_answer": _localized_message(state, "small_talk_response"),
+    }
+
+
 def _reject_node(state: AgentState) -> dict[str, Any]:
     return {
         "status": RunStatus.REJECTED,
@@ -1338,6 +1429,7 @@ def build_agent_graph(
     graph.add_node("run_report", _run_report_node)
     graph.add_node("calc_metrics", _calc_metrics_node)
     graph.add_node("reason_over_results", _reason_over_results_node)
+    graph.add_node("small_talk", _small_talk_node)
     graph.add_node("clarify", _clarify_node)
     graph.add_node("reject", _reject_node)
     graph.add_node("deny", _deny_node)
@@ -1353,6 +1445,7 @@ def build_agent_graph(
         _select_authorization_route,
         {
             "run_report": "run_report",
+            "small_talk": "small_talk",
             "clarify": "clarify",
             "reject": "reject",
             "deny": "deny",
@@ -1392,6 +1485,7 @@ def build_agent_graph(
         },
     )
     graph.add_edge("clarify", "persist_run")
+    graph.add_edge("small_talk", "persist_run")
     graph.add_edge("reject", "persist_run")
     graph.add_edge("deny", "persist_run")
     graph.add_edge("fail", "persist_run")

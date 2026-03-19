@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 import app.agent.graph as graph_module
 from app.api.app import create_app
 from app.api.schemas import AgentRunRequest
+from app.core.config import get_settings
 from app.services.agent_runtime import AgentRuntimeExecutionError, get_agent_runtime_service
 
 pytestmark = pytest.mark.anyio
@@ -32,6 +33,17 @@ def _missing_openai_key() -> Any:
 @pytest.fixture(autouse=True)
 def _disable_openai_client(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(graph_module, "get_llm_client", _missing_openai_key)
+
+
+@pytest.fixture(autouse=True)
+def _force_mock_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMARTREST_EXCEL_REPORT_FILE_PATH", "")
+    monkeypatch.setenv("EXCEL_REPORT_FILE_PATH", "")
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        get_settings.cache_clear()
 
 
 @pytest.fixture
@@ -100,6 +112,18 @@ async def test_unsupported_request_returns_rejected_status(api_client: AsyncClie
     assert payload["status"] == "rejected"
     assert payload["needs_clarification"] is False
     assert payload["selected_report_id"] is None
+
+
+async def test_small_talk_returns_completed_without_report(api_client: AsyncClient) -> None:
+    response = await api_client.post("/agent/run", json=_request_payload("Hello there"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["selected_report_id"] is None
+    assert payload["applied_filters"] is None
+    assert payload["needs_clarification"] is False
+    assert payload["answer"]
 
 
 async def test_denied_scope_returns_denied_and_blocks_report_path(

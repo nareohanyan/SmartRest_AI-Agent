@@ -108,6 +108,48 @@ def test_supported_request_executes_full_run_path() -> None:
     assert "sales_total_per_day=" in (final_state.final_answer or "")
 
 
+def test_small_talk_routes_without_report_execution() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state("Hello there")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "openai_interpret",
+        "authorize_report",
+        "small_talk",
+        "persist_run",
+    ]
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.selected_report_id is None
+    assert final_state.tool_responses.run_report is None
+    assert final_state.final_answer is not None
+    assert "analytics" in final_state.final_answer.lower()
+
+
+def test_greeting_with_analytics_request_prioritizes_report_path() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state("Hi, what were total sales 2026-03-01 to 2026-03-07?")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "openai_interpret",
+        "authorize_report",
+        "run_report",
+        "calc_metrics",
+        "reason_over_results",
+        "compose_output",
+        "persist_run",
+    ]
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.selected_report_id is ReportType.SALES_TOTAL
+
+
 def test_multi_intent_request_returns_structured_multi_block_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

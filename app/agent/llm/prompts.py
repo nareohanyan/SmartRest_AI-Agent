@@ -35,7 +35,8 @@ Domain scope (supported reports only):
 
 Return only one valid JSON object with this exact shape:
 {
-  "intent": "get_kpi" | "breakdown_kpi" | "needs_clarification" | "unsupported_request",
+  "intent": "get_kpi" | "breakdown_kpi" | "small_talk" |
+            "needs_clarification" | "unsupported_request",
   "report_id": "sales_total" | "order_count" | "average_check" | "sales_by_source" |
                "sales_by_courier" | "top_locations" | "top_customers" |
                "repeat_customer_rate" | "delivery_fee_analytics" | "payment_collection" |
@@ -50,6 +51,7 @@ Return only one valid JSON object with this exact shape:
 
 Interpretation policy:
 - Use "unsupported_request" only when the business question is outside supported reports.
+- Use "small_talk" for generic conversational messages (greetings, thanks) with no analytics intent.
 - Use "needs_clarification" when required filters are missing or ambiguous.
 - For executable intents ("get_kpi", "breakdown_kpi"), include both report_id and full filters.
 - If the question implies "by source" breakdown, use report_id "sales_by_source" and intent
@@ -107,6 +109,14 @@ class InterpretationOutput(SchemaModel):
                     raise ValueError("filters are required for executable intents.")
             if self.needs_clarification and self.report_id is None:
                 raise ValueError("report_id is required when clarifying an executable intent.")
+
+        if self.intent is IntentType.SMALL_TALK:
+            if self.report_id is not None:
+                raise ValueError("report_id must be null for small_talk.")
+            if self.filters is not None:
+                raise ValueError("filters must be null for small_talk.")
+            if self.needs_clarification:
+                raise ValueError("needs_clarification must be false for small_talk.")
 
         if self.intent is IntentType.UNSUPPORTED_REQUEST:
             if self.report_id is not None:

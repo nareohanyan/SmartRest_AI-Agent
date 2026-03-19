@@ -67,6 +67,24 @@ def test_validate_interpretation_output_rejects_missing_required_fields() -> Non
         )
 
 
+def test_validate_interpretation_output_accepts_small_talk_payload() -> None:
+    interpretation = validate_interpretation_output(
+        {
+            "intent": "small_talk",
+            "report_id": None,
+            "filters": None,
+            "needs_clarification": False,
+            "clarification_question": None,
+            "confidence": 0.95,
+            "reasoning_notes": "Greeting message.",
+        }
+    )
+
+    assert interpretation.intent is IntentType.SMALL_TALK
+    assert interpretation.report_id is None
+    assert interpretation.filters is None
+
+
 def test_parse_interpretation_output_json_rejects_non_json_text() -> None:
     with pytest.raises(InterpretationContractError):
         parse_interpretation_output_json("this is not json")
