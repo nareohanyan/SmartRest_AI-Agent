@@ -1,6 +1,13 @@
 """Typed schemas for the SmartRest agent boundaries."""
 
-from app.schemas.agent import AgentState, IntentType, RunStatus, ToolResponses
+from app.schemas.agent import (
+    AgentState,
+    IntentType,
+    PlannerSource,
+    PolicyRoute,
+    RunStatus,
+    ToolResponses,
+)
 from app.schemas.base import SchemaModel
 from app.schemas.calculations import (
     AverageCalculationSpec,
@@ -56,6 +63,8 @@ __all__ = [
     "ListReportsResponse",
     "PerDayRateCalculationSpec",
     "PercentChangeCalculationSpec",
+    "PlannerSource",
+    "PolicyRoute",
     "ReportDefinition",
     "ReportFilterKey",
     "ReportFilters",

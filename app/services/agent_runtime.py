@@ -48,16 +48,6 @@ class AgentRuntimeService:
         self._persistence_service = persistence_service or get_runtime_persistence_service()
 
     def run(self, request: AgentRunRequest) -> AgentRunResponse:
-        run_id = uuid4()
-        initial_state = AgentState(
-            thread_id=request.thread_id,
-            run_id=run_id,
-            user_question=request.user_question,
-            scope_request=ResolveScopeRequest.model_validate(request.scope_request.model_dump()),
-            needs_clarification=False,
-            status=RunStatus.RUNNING,
-        )
-
         start_persistence_result = self._persistence_service.start_run(
             thread_id=request.thread_id,
             user_id=request.scope_request.user_id,
@@ -67,6 +57,15 @@ class AgentRuntimeService:
             metadata_json={"thread_id": str(request.thread_id)},
         )
         start_warnings = start_persistence_result.warnings
+        run_id = start_persistence_result.internal_run_id or uuid4()
+        initial_state = AgentState(
+            thread_id=request.thread_id,
+            run_id=run_id,
+            user_question=request.user_question,
+            scope_request=ResolveScopeRequest.model_validate(request.scope_request.model_dump()),
+            needs_clarification=False,
+            status=RunStatus.RUNNING,
+        )
 
         try:
             graph = self._graph_factory()

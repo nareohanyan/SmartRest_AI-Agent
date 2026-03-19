@@ -34,6 +34,7 @@ class AnalysisIntent(str, Enum):
     TREND = "trend"
     COMPARISON = "comparison"
     RANKING = "ranking"
+    SMALLTALK = "smalltalk"
     CLARIFY = "clarify"
     UNSUPPORTED = "unsupported"
 
@@ -102,7 +103,8 @@ class AnalysisPlan(SchemaModel):
         if self.intent is AnalysisIntent.CLARIFY and not self.needs_clarification:
             raise ValueError("clarify intent requires needs_clarification=true")
         if (
-            self.intent not in {AnalysisIntent.CLARIFY, AnalysisIntent.UNSUPPORTED}
+            self.intent
+            not in {AnalysisIntent.CLARIFY, AnalysisIntent.UNSUPPORTED, AnalysisIntent.SMALLTALK}
             and self.retrieval is None
         ):
             raise ValueError("retrieval is required for supported plans")

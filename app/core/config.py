@@ -1,6 +1,7 @@
 """Application configuration."""
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,6 +27,13 @@ class Settings(BaseSettings):
     openai_retry_max_attempts: int = 3
     openai_retry_initial_delay_seconds: float = 0.2
     openai_retry_max_delay_seconds: float = 2.0
+
+    planner_mode: Literal["deterministic", "hybrid", "llm"] = "hybrid"
+    planner_min_confidence: float = Field(default=0.75, ge=0.0, le=1.0)
+    planner_max_date_range_days: int = Field(default=366, ge=1, le=3660)
+    planner_max_tool_calls: int = Field(default=6, ge=1, le=20)
+    planner_allow_safe_general_topics: bool = True
+    planner_fallback_enabled: bool = True
 
     database_url: str | None = Field(
         default=None,

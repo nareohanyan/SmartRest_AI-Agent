@@ -12,7 +12,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name)
 
     @app.get("/health", tags=["system"])
-    def health() -> dict[str, str]:
+    async def health() -> dict[str, str]:
         return {"status": "ok", "environment": settings.app_env}
 
     app.include_router(agent_router)

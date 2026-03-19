@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from decimal import Decimal
 from enum import Enum
+from typing import Any
 from uuid import UUID
 
 from pydantic import Field, model_validator
 
+from app.schemas.analysis import AnalysisPlan
 from app.schemas.base import SchemaModel
 from app.schemas.calculations import CalculationWarningCode, DerivedMetric
 from app.schemas.reports import ReportFilters, ReportType
@@ -21,6 +23,7 @@ from app.schemas.tools import (
 class IntentType(str, Enum):
     GET_KPI = "get_kpi"
     BREAKDOWN_KPI = "breakdown_kpi"
+    SMALLTALK = "smalltalk"
     NEEDS_CLARIFICATION = "needs_clarification"
     UNSUPPORTED_REQUEST = "unsupported_request"
 
@@ -32,6 +35,23 @@ class RunStatus(str, Enum):
     REJECTED = "rejected"
     DENIED = "denied"
     FAILED = "failed"
+
+
+class PlannerSource(str, Enum):
+    DETERMINISTIC = "deterministic"
+    LLM = "llm"
+    FALLBACK = "fallback"
+
+
+class PolicyRoute(str, Enum):
+    PREPARE_LEGACY_REPORT = "prepare_legacy_report"
+    RUN_COMPARISON = "run_comparison"
+    RUN_RANKING = "run_ranking"
+    RUN_TREND = "run_trend"
+    SMALLTALK = "smalltalk"
+    CLARIFY = "clarify"
+    REJECT = "reject"
+    SAFE_ANSWER = "safe_answer"
 
 
 class ToolResponses(SchemaModel):
@@ -48,11 +68,17 @@ class AgentState(SchemaModel):
     scope_request: ResolveScopeRequest | None = None
     user_scope: ResolveScopeResponse | None = None
     intent: IntentType | None = None
+    analysis_plan: AnalysisPlan | None = None
+    plan_source: PlannerSource | None = None
+    plan_confidence: float | None = None
+    policy_route: PolicyRoute | None = None
+    policy_reason: str | None = None
     selected_report_id: ReportType | None = None
     filters: ReportFilters | None = None
     needs_clarification: bool
     clarification_question: str | None = None
     tool_responses: ToolResponses = Field(default_factory=ToolResponses)
+    analysis_artifacts: dict[str, Any] = Field(default_factory=dict)
     base_metrics: dict[str, Decimal] = Field(default_factory=dict)
     derived_metrics: list[DerivedMetric] = Field(default_factory=list)
     calc_warnings: list[CalculationWarningCode] = Field(default_factory=list)

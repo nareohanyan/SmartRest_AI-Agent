@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -99,10 +99,11 @@ class _PersistenceSpy:
 
 
 def test_runtime_merges_persistence_warnings_into_response() -> None:
+    internal_run_id = uuid4()
     spy = _PersistenceSpy(
         start_result=StartRunPersistenceResult(
             thread_id=uuid4(),
-            internal_run_id=uuid4(),
+            internal_run_id=internal_run_id,
             warnings=["persistence_warning_start"],
         ),
         finish_result=FinishRunPersistenceResult(
@@ -117,6 +118,7 @@ def test_runtime_merges_persistence_warnings_into_response() -> None:
     response = runtime_service.run(_request_payload())
 
     assert response.status is RunStatus.COMPLETED
+    assert response.run_id == internal_run_id
     assert response.warnings == [
         "runtime_warning",
         "persistence_warning_start",
@@ -204,3 +206,30 @@ def test_runtime_persists_failed_terminal_status_on_internal_error() -> None:
     assert len(spy.finish_calls) == 1
     assert spy.finish_calls[0]["status"] is RunStatus.FAILED
     assert spy.finish_calls[0]["error_code"] == "runtime_internal_error"
+
+
+def test_runtime_uses_fallback_run_id_when_persistence_run_id_missing() -> None:
+    spy = _PersistenceSpy(
+        start_result=StartRunPersistenceResult(
+            thread_id=None,
+            internal_run_id=None,
+            warnings=["persistence_warning_start"],
+        ),
+        finish_result=FinishRunPersistenceResult(
+            warnings=["persistence_warning_finish"],
+        ),
+    )
+    runtime_service = AgentRuntimeService(
+        graph_factory=lambda: _SuccessGraph(),
+        persistence_service=spy,  # type: ignore[arg-type]
+    )
+
+    response = runtime_service.run(_request_payload())
+
+    assert response.status is RunStatus.COMPLETED
+    assert isinstance(response.run_id, UUID)
+    assert response.warnings == [
+        "runtime_warning",
+        "persistence_warning_start",
+        "persistence_warning_finish",
+    ]

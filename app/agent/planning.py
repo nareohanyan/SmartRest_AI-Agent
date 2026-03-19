@@ -29,10 +29,43 @@ from app.schemas.calculations import (
 )
 
 _DATE_RANGE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})\s*(?:to|-)\s*(\d{4}-\d{2}-\d{2})")
+_ARMENIAN_CHAR_RE = re.compile(r"[\u0531-\u058F]")
+_SMALLTALK_TRAILING_PUNCT_RE = re.compile(r"[!?.…]+$")
 
 
 class PlanningError(ValueError):
     """Raised when a request cannot be planned safely."""
+
+
+def _is_armenian_text(text: str) -> bool:
+    return _ARMENIAN_CHAR_RE.search(text) is not None
+
+
+def _is_smalltalk(question: str) -> bool:
+    normalized = question.lower().strip()
+    if not normalized:
+        return False
+
+    normalized = _SMALLTALK_TRAILING_PUNCT_RE.sub("", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+
+    pure_smalltalk_phrases = {
+        "hi",
+        "hello",
+        "hey",
+        "hello there",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "how are you",
+        "բարև",
+        "բարեւ",
+        "ողջույն",
+        "բարի լույս",
+        "բարի երեկո",
+        "ինչպես ես",
+    }
+    return normalized in pure_smalltalk_phrases
 
 
 def _parse_date_range(question: str) -> tuple[date, date] | None:
@@ -89,6 +122,13 @@ def _build_previous_period(date_from: date, date_to: date) -> tuple[date, date]:
 
 
 def plan_analysis(question: str) -> AnalysisPlan:
+    if _is_smalltalk(question):
+        return AnalysisPlan(
+            intent=AnalysisIntent.SMALLTALK,
+            needs_clarification=False,
+            reasoning_notes="Greeting/smalltalk intent routed to conversational safe path.",
+        )
+
     metric = _detect_metric(question)
     if metric is None:
         return AnalysisPlan(
@@ -99,12 +139,15 @@ def plan_analysis(question: str) -> AnalysisPlan:
 
     date_range = _parse_date_range(question)
     if date_range is None:
+        clarification_question = (
+            "Խնդրում եմ նշեք ժամանակահատվածը YYYY-MM-DD to YYYY-MM-DD ձևաչափով:"
+            if _is_armenian_text(question)
+            else "Please provide a date range in YYYY-MM-DD to YYYY-MM-DD format."
+        )
         return AnalysisPlan(
             intent=AnalysisIntent.CLARIFY,
             needs_clarification=True,
-            clarification_question=(
-                "Please provide a date range in YYYY-MM-DD to YYYY-MM-DD format."
-            ),
+            clarification_question=clarification_question,
             reasoning_notes="Supported demo planning requires an explicit date range.",
         )
 

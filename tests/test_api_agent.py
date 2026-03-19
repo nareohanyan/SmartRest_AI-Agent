@@ -9,8 +9,9 @@ from httpx import ASGITransport, AsyncClient
 
 import app.agent.graph as graph_module
 from app.api.app import create_app
+from app.api.routes.agent import _get_runtime_service
 from app.api.schemas import AgentRunRequest
-from app.services.agent_runtime import AgentRuntimeExecutionError, get_agent_runtime_service
+from app.services.agent_runtime import AgentRuntimeExecutionError
 
 pytestmark = pytest.mark.anyio
 
@@ -116,7 +117,7 @@ async def test_denied_scope_returns_denied_and_blocks_report_path(
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "denied"
-    assert payload["selected_report_id"] is not None
+    assert payload["selected_report_id"] is None
     assert payload["answer"] is not None
 
 
@@ -140,10 +141,10 @@ async def test_runtime_failure_returns_controlled_500(
         def run(self, _request: AgentRunRequest) -> Any:
             raise AgentRuntimeExecutionError("boom")
 
-    def _override_dependency() -> _FailingRuntime:
+    async def _override_dependency() -> _FailingRuntime:
         return _FailingRuntime()
 
-    app.dependency_overrides[get_agent_runtime_service] = _override_dependency
+    app.dependency_overrides[_get_runtime_service] = _override_dependency
 
     response = await api_client.post(
         "/agent/run",
