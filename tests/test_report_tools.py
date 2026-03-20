@@ -9,6 +9,7 @@ import pytest
 from app.agent.report_tools import (
     get_report_definition_tool,
     list_reports_tool,
+    resolve_filter_value_tool,
     resolve_scope_tool,
     run_report_tool,
 )
@@ -19,6 +20,8 @@ from app.schemas.tools import (
     AccessStatus,
     GetReportDefinitionRequest,
     ListReportsRequest,
+    ResolveFilterValueRequest,
+    ResolveFilterValueStatus,
     ResolveScopeRequest,
     RunReportRequest,
 )
@@ -170,7 +173,59 @@ def test_run_report_unknown_source_fails() -> None:
         run_report_tool(request)
 
 
-def test_run_report_source_filter_not_supported_for_sales_total_fails() -> None:
+def test_resolve_filter_value_tool_resolves_transliterated_mock_courier() -> None:
+    response = resolve_filter_value_tool(
+        ResolveFilterValueRequest(
+            report_id=ReportType.ORDER_COUNT,
+            filter_key="courier",
+            raw_value="Ազատ",
+        )
+    )
+
+    assert response.status is ResolveFilterValueStatus.RESOLVED
+    assert response.matched_value == "azat"
+
+
+def test_resolve_filter_value_tool_returns_mock_location_candidates_for_partial_match() -> None:
+    response = resolve_filter_value_tool(
+        ResolveFilterValueRequest(
+            report_id=ReportType.ORDER_COUNT,
+            filter_key="location",
+            raw_value="Kasakh Andraniki",
+        )
+    )
+
+    assert response.status is ResolveFilterValueStatus.UNRESOLVED
+    assert "kasakh_andraniki_29" in response.candidates
+
+
+def test_resolve_filter_value_tool_resolves_phone_with_country_code() -> None:
+    response = resolve_filter_value_tool(
+        ResolveFilterValueRequest(
+            report_id=ReportType.ORDER_COUNT,
+            filter_key="phone_number",
+            raw_value="+374 94 727202",
+        )
+    )
+
+    assert response.status is ResolveFilterValueStatus.RESOLVED
+    assert response.matched_value == "094727202"
+
+
+def test_resolve_filter_value_tool_supports_generic_filters_across_reports() -> None:
+    response = resolve_filter_value_tool(
+        ResolveFilterValueRequest(
+            report_id=ReportType.SALES_TOTAL,
+            filter_key="courier",
+            raw_value="Azat",
+        )
+    )
+
+    assert response.status is ResolveFilterValueStatus.RESOLVED
+    assert response.matched_value == "azat"
+
+
+def test_run_report_sales_total_supports_source_filter() -> None:
     request = RunReportRequest(
         **_identity_payload(),
         request=ReportRequest(
@@ -183,8 +238,66 @@ def test_run_report_source_filter_not_supported_for_sales_total_fails() -> None:
         ),
     )
 
-    with pytest.raises(ValueError, match="Source filter is not supported"):
-        run_report_tool(request)
+    response = run_report_tool(request)
+
+    assert response.result.report_id is ReportType.SALES_TOTAL
+    assert response.result.filters.source == "glovo"
+    assert response.result.metrics[0].value < 12345.67
+
+
+def test_run_report_order_count_supports_exact_courier_location_phone_filters() -> None:
+    base_request = RunReportRequest(
+        **_identity_payload(),
+        request=ReportRequest(
+            report_id=ReportType.ORDER_COUNT,
+            filters=ReportFilters(
+                date_from=date(2026, 3, 1),
+                date_to=date(2026, 3, 7),
+            ),
+        ),
+    )
+    filtered_request = RunReportRequest(
+        **_identity_payload(),
+        request=ReportRequest(
+            report_id=ReportType.ORDER_COUNT,
+            filters=ReportFilters(
+                date_from=date(2026, 3, 1),
+                date_to=date(2026, 3, 7),
+                courier="Ազատ",
+                location="Kasakh Andraniki 29",
+                phone_number="094-727-202",
+            ),
+        ),
+    )
+
+    base_response = run_report_tool(base_request)
+    filtered_response_1 = run_report_tool(filtered_request)
+    filtered_response_2 = run_report_tool(filtered_request)
+
+    assert filtered_response_1.model_dump() == filtered_response_2.model_dump()
+    assert filtered_response_1.result.metrics[0].label == "order_count"
+    assert 1.0 <= filtered_response_1.result.metrics[0].value <= 300.0
+    assert filtered_response_1.result.metrics[0].value != base_response.result.metrics[0].value
+
+
+def test_run_report_average_check_supports_courier_filter() -> None:
+    request = RunReportRequest(
+        **_identity_payload(),
+        request=ReportRequest(
+            report_id=ReportType.AVERAGE_CHECK,
+            filters=ReportFilters(
+                date_from=date(2026, 3, 1),
+                date_to=date(2026, 3, 7),
+                courier="Azat",
+            ),
+        ),
+    )
+
+    response = run_report_tool(request)
+
+    assert response.result.report_id is ReportType.AVERAGE_CHECK
+    assert response.result.filters.courier == "Azat"
+    assert response.result.metrics[0].value != 35.78
 
 
 @pytest.mark.parametrize(

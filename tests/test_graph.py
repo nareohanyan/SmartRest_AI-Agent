@@ -18,7 +18,12 @@ from app.core.config import get_settings
 from app.persistence.runtime_persistence import FinishRunPersistenceResult
 from app.schemas.agent import AgentState, LLMErrorCategory, RunStatus
 from app.schemas.reports import ReportType
-from app.schemas.tools import AccessStatus, ResolveScopeResponse
+from app.schemas.tools import (
+    AccessStatus,
+    ResolveFilterValueResponse,
+    ResolveFilterValueStatus,
+    ResolveScopeResponse,
+)
 
 
 class _FakeLLMClient:
@@ -176,7 +181,7 @@ def test_multi_intent_request_returns_structured_multi_block_answer(
         assert final_state.status is RunStatus.COMPLETED
         assert len(final_state.additional_run_reports) == 1
         assert final_state.final_answer is not None
-        assert "\n1. " in final_state.final_answer
+        assert final_state.final_answer.startswith("1. ")
         assert "\n2. " in final_state.final_answer
         assert "Multi-report response:" not in final_state.final_answer
     finally:
@@ -282,6 +287,122 @@ def test_missing_date_routes_to_clarify_without_report_execution() -> None:
     assert final_state.needs_clarification is True
     assert final_state.tool_responses.run_report is None
     assert "date range" in (final_state.final_answer or "").lower()
+
+
+def test_delivery_count_with_armenian_location_without_exact_match_clarifies() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state("Բաղրամյան 22֊ում քանի հատ առաքում ա եղել 2024-12-01 to 2024-12-31")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+
+    assert final_state.status is RunStatus.CLARIFY
+    assert final_state.selected_report_id is ReportType.ORDER_COUNT
+    assert final_state.final_answer is not None
+    assert "բաղրամյան 22" in final_state.final_answer.lower()
+    assert "saryan 22" not in final_state.final_answer.lower()
+
+
+def test_delivery_count_with_armenian_courier_resolves_to_canonical_value() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state("Ազատը քանի հատ առաքում ա արել 2024-12-01 to 2024-12-31")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.selected_report_id is ReportType.ORDER_COUNT
+    assert final_state.filters is not None
+    assert final_state.filters.courier == "Azat"
+    assert final_state.filters.location is None
+    assert final_state.filters.phone_number is None
+
+
+def test_order_count_query_resolves_exact_phone_number_filter() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state("010311111 համարից քանի պատվեր է եղել 2024-12-01 to 2024-12-31")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.selected_report_id is ReportType.ORDER_COUNT
+    assert final_state.filters is not None
+    assert final_state.filters.phone_number == "010311111"
+
+
+def test_order_count_filter_resolution_uses_llm_candidate_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fake_resolve_filter(_request: Any) -> ResolveFilterValueResponse:
+        return ResolveFilterValueResponse(
+            status=ResolveFilterValueStatus.UNRESOLVED,
+            matched_value=None,
+            candidates=["Azat", "Edgar"],
+        )
+
+    monkeypatch.setattr(graph_module, "resolve_filter_value_tool", _fake_resolve_filter)
+    monkeypatch.setattr(
+        graph_module,
+        "get_llm_client",
+        lambda: _FakeLLMClient(
+            output_text=json.dumps(
+                {
+                    "matched_value": "Azat",
+                    "confidence": 0.92,
+                    "reasoning_notes": "Resolved against provided candidates.",
+                }
+            )
+        ),
+    )
+    graph = build_agent_graph()
+    payload = _initial_state("Ազատը քանի հատ առաքում ա արել 2024-12-01 to 2024-12-31")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.filters is not None
+    assert final_state.filters.courier == "Azat"
+    assert "filter_resolution_llm_used:courier" in final_state.warnings
+
+
+def test_sales_total_query_supports_generic_source_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SMARTREST_EXCEL_REPORT_FILE_PATH", "")
+    monkeypatch.setenv("EXCEL_REPORT_FILE_PATH", "")
+    get_settings.cache_clear()
+    try:
+        graph = build_agent_graph()
+        payload = _initial_state("Show total sales source glovo 2026-03-01 to 2026-03-07.")
+
+        final_state = AgentState.model_validate(graph.invoke(payload))
+
+        assert final_state.status is RunStatus.COMPLETED
+        assert final_state.selected_report_id is ReportType.SALES_TOTAL
+        assert final_state.filters is not None
+        assert final_state.filters.source == "glovo"
+        assert final_state.final_answer is not None
+        assert "Filters: source=glovo." in final_state.final_answer
+    finally:
+        get_settings.cache_clear()
+
+
+def test_average_check_query_supports_generic_courier_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SMARTREST_EXCEL_REPORT_FILE_PATH", "")
+    monkeypatch.setenv("EXCEL_REPORT_FILE_PATH", "")
+    get_settings.cache_clear()
+    try:
+        graph = build_agent_graph()
+        payload = _initial_state("Show average check courier Azat 2026-03-01 to 2026-03-07.")
+
+        final_state = AgentState.model_validate(graph.invoke(payload))
+
+        assert final_state.status is RunStatus.COMPLETED
+        assert final_state.selected_report_id is ReportType.AVERAGE_CHECK
+        assert final_state.filters is not None
+        assert final_state.filters.courier == "azat"
+    finally:
+        get_settings.cache_clear()
 
 
 def test_extract_filters_supports_today(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -469,7 +590,7 @@ def test_llm_interpretation_routes_based_on_model_output(
     assert final_state.selected_report_id is expected_report_id
 
 
-def test_malformed_llm_output_routes_to_fallback_clarify(
+def test_malformed_llm_output_routes_to_deterministic_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_client = _FakeLLMClient(output_text='{"intent": "get_kpi"}')
@@ -484,14 +605,14 @@ def test_malformed_llm_output_routes_to_fallback_clarify(
         "resolve_scope",
         "openai_interpret",
         "authorize_report",
-        "clarify",
+        "reject",
         "persist_run",
     ]
-    assert final_state.status is RunStatus.CLARIFY
-    assert "interpretation_contract_invalid" in final_state.warnings
+    assert final_state.status is RunStatus.REJECTED
+    assert "llm_interpretation_contract_invalid" in final_state.warnings
 
 
-def test_llm_timeout_error_propagates_from_interpret_node(
+def test_llm_timeout_error_uses_deterministic_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     timeout_error = LLMClientError(
@@ -502,11 +623,20 @@ def test_llm_timeout_error_propagates_from_interpret_node(
     fake_client = _FakeLLMClient(exc=timeout_error)
     monkeypatch.setattr(graph_module, "get_llm_client", lambda: fake_client)
     graph = build_agent_graph()
+    payload = _initial_state("Show KPI snapshot 2026-03-01 to 2026-03-07.")
 
-    with pytest.raises(LLMClientError) as exc_info:
-        graph.invoke(_initial_state("Show KPI snapshot 2026-03-01 to 2026-03-07."))
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
 
-    assert exc_info.value.category is LLMErrorCategory.TIMEOUT
+    assert order == [
+        "resolve_scope",
+        "openai_interpret",
+        "authorize_report",
+        "reject",
+        "persist_run",
+    ]
+    assert final_state.status is RunStatus.REJECTED
+    assert "interpretation_llm_fallback" in final_state.warnings
 
 
 def test_llm_rate_limit_uses_deterministic_fallback(

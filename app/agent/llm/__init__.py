@@ -8,21 +8,33 @@ from app.agent.llm.client import (
 from app.agent.llm.exceptions import LLMClientError
 from app.agent.llm.prompts import (
     CLARIFICATION_FALLBACK_QUESTION,
+    FILTER_MATCH_SYSTEM_PROMPT,
     INTERPRET_REQUEST_SYSTEM_PROMPT,
+    FilterMatchContractError,
+    FilterMatchOutput,
     InterpretationContractError,
     InterpretationOutput,
+    build_filter_match_messages,
     build_interpret_request_messages,
+    parse_filter_match_output_json,
     parse_interpretation_output_json,
+    validate_filter_match_output,
     validate_interpretation_output,
 )
 
 __all__ = [
     "CLARIFICATION_FALLBACK_QUESTION",
+    "FILTER_MATCH_SYSTEM_PROMPT",
+    "FilterMatchContractError",
+    "FilterMatchOutput",
     "INTERPRET_REQUEST_SYSTEM_PROMPT",
     "InterpretationContractError",
     "InterpretationOutput",
+    "build_filter_match_messages",
     "build_interpret_request_messages",
+    "parse_filter_match_output_json",
     "parse_interpretation_output_json",
+    "validate_filter_match_output",
     "validate_interpretation_output",
     "LLMClient",
     "LLMClientError",

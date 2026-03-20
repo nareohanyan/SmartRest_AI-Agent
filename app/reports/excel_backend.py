@@ -11,8 +11,13 @@ from typing import Any
 from openpyxl import load_workbook
 from openpyxl.utils.datetime import from_excel
 
+from app.reports.filter_resolution import normalize_phone_value, resolve_filter_value_from_catalog
 from app.schemas.reports import ReportFilters, ReportMetric, ReportRequest, ReportResult, ReportType
-from app.schemas.tools import RunReportResponse
+from app.schemas.tools import (
+    ResolveFilterValueRequest,
+    ResolveFilterValueResponse,
+    RunReportResponse,
+)
 
 COLUMN_MAP: dict[str, str] = {
     "Կտրոն": "check",
@@ -318,8 +323,13 @@ def _rows_in_date_range(rows: list[ExcelOrderRow], filters: ReportFilters) -> li
 def _normalize_key(value: str | None) -> str | None:
     if value is None:
         return None
-    normalized = " ".join(value.split()).strip().lower()
+    normalized = value.replace("֊", "-").replace("–", "-").replace("—", "-")
+    normalized = " ".join(normalized.split()).strip().lower()
     return normalized or None
+
+
+def _normalize_phone_filter(value: str | None) -> str | None:
+    return normalize_phone_value(value)
 
 
 def _customer_identity_key(row: ExcelOrderRow) -> str | None:
@@ -409,6 +419,37 @@ def _sales_by_weekday_metrics(rows: list[ExcelOrderRow]) -> list[ReportMetric]:
     ]
 
 
+def _apply_dimension_filters(
+    rows: list[ExcelOrderRow],
+    filters: ReportFilters,
+) -> list[ExcelOrderRow]:
+    requested_source = _normalize_key(filters.source)
+    requested_courier = _normalize_key(filters.courier)
+    requested_location = _normalize_key(filters.location)
+    requested_phone_number = _normalize_phone_filter(filters.phone_number)
+
+    filtered_rows = rows
+    if requested_source is not None:
+        filtered_rows = [
+            row for row in filtered_rows if _normalize_key(row.source) == requested_source
+        ]
+    if requested_courier is not None:
+        filtered_rows = [
+            row for row in filtered_rows if _normalize_key(row.courier) == requested_courier
+        ]
+    if requested_location is not None:
+        filtered_rows = [
+            row for row in filtered_rows if _normalize_key(row.address) == requested_location
+        ]
+    if requested_phone_number is not None:
+        filtered_rows = [
+            row
+            for row in filtered_rows
+            if _normalize_phone_filter(row.phone_number) == requested_phone_number
+        ]
+    return filtered_rows
+
+
 def _metrics_for_request(
     request: ReportRequest,
     rows: list[ExcelOrderRow],
@@ -418,9 +459,10 @@ def _metrics_for_request(
     report_id = request.report_id
     filters = request.filters
     requested_source = _normalize_key(filters.source)
-
-    if requested_source is not None and report_id is not ReportType.SALES_BY_SOURCE:
-        raise ValueError(f"Source filter is not supported for report_id={report_id.value}")
+    requested_courier = _normalize_key(filters.courier)
+    requested_location = _normalize_key(filters.location)
+    requested_phone_number = _normalize_phone_filter(filters.phone_number)
+    rows = _apply_dimension_filters(rows, filters)
 
     if report_id is ReportType.SALES_TOTAL:
         return [ReportMetric(label="sales_total", value=float(_sales_total(rows)))]
@@ -439,29 +481,16 @@ def _metrics_for_request(
     if report_id is ReportType.SALES_BY_SOURCE:
         source_totals = _group_sales(rows, key_getter=lambda row: row.source)
         if requested_source is not None:
-            normalized_totals = {
-                _normalize_key(label) or "unknown": value
-                for label, value in source_totals.items()
-            }
-            normalized_catalog = {
-                _normalize_key(row.source) or "unknown"
-                for row in all_rows
-            }
-            if requested_source in normalized_totals:
-                return [
-                    ReportMetric(
-                        label=requested_source,
-                        value=float(normalized_totals[requested_source]),
-                    )
-                ]
-            if requested_source not in normalized_catalog:
-                raise ValueError(f"Unsupported source: {requested_source}")
-            return [ReportMetric(label=requested_source, value=0.0)]
+            if source_totals:
+                return _ranked_metrics(source_totals)
+            return [ReportMetric(label=filters.source or requested_source, value=0.0)]
         metrics = _ranked_metrics(source_totals)
         return metrics or [ReportMetric(label="unknown", value=0.0)]
 
     if report_id is ReportType.SALES_BY_COURIER:
         metrics = _ranked_metrics(_group_sales(rows, key_getter=lambda row: row.courier))
+        if requested_courier is not None and not metrics:
+            return [ReportMetric(label=filters.courier or requested_courier, value=0.0)]
         return metrics or [ReportMetric(label="unknown", value=0.0)]
 
     if report_id is ReportType.TOP_LOCATIONS:
@@ -469,10 +498,14 @@ def _metrics_for_request(
             _group_sales(rows, key_getter=lambda row: row.address),
             top_n=10,
         )
+        if requested_location is not None and not metrics:
+            return [ReportMetric(label=filters.location or requested_location, value=0.0)]
         return metrics or [ReportMetric(label="unknown", value=0.0)]
 
     if report_id is ReportType.TOP_CUSTOMERS:
         metrics = _ranked_metrics(_group_sales_by_customer(rows), top_n=10)
+        if requested_phone_number is not None and not metrics:
+            return [ReportMetric(label=filters.phone_number or requested_phone_number, value=0.0)]
         return metrics or [ReportMetric(label="unknown", value=0.0)]
 
     if report_id is ReportType.REPEAT_CUSTOMER_RATE:
@@ -607,3 +640,34 @@ def run_excel_report(
         generated_at=_generated_at(request.filters),
     )
     return RunReportResponse(result=result, warnings=[EXCEL_BACKEND_WARNING])
+
+
+def resolve_excel_filter_value(
+    request: ResolveFilterValueRequest,
+    *,
+    file_path: str | Path,
+    sheet_name: str | None = None,
+) -> ResolveFilterValueResponse:
+    rows = load_excel_orders(file_path=file_path, sheet_name=sheet_name)
+    value_getters = {
+        "source": lambda row: row.source,
+        "courier": lambda row: row.courier,
+        "location": lambda row: row.address,
+        "phone_number": lambda row: row.phone_number,
+    }
+    getter = value_getters.get(request.filter_key.value)
+    if getter is None:
+        return resolve_filter_value_from_catalog(
+            report_id=request.report_id,
+            filter_key=request.filter_key,
+            raw_value=request.raw_value,
+            catalog_values=[],
+        )
+
+    catalog_values = sorted({value for row in rows if (value := getter(row))})
+    return resolve_filter_value_from_catalog(
+        report_id=request.report_id,
+        filter_key=request.filter_key,
+        raw_value=request.raw_value,
+        catalog_values=catalog_values,
+    )

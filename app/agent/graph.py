@@ -13,25 +13,43 @@ from app.agent.calc_policy import select_calculation_specs
 from app.agent.calc_tools import compute_metrics_tool
 from app.agent.llm import (
     CLARIFICATION_FALLBACK_QUESTION,
+    FilterMatchContractError,
     InterpretationContractError,
     LLMClientError,
+    build_filter_match_messages,
     build_interpret_request_messages,
     get_llm_client,
+    parse_filter_match_output_json,
     parse_interpretation_output_json,
     validate_interpretation_output,
 )
 from app.agent.metrics_mapper import map_report_response_to_base_metrics
-from app.agent.report_tools import resolve_scope_tool, run_report_tool
+from app.agent.report_tools import resolve_filter_value_tool, resolve_scope_tool, run_report_tool
 from app.persistence.runtime_persistence import RuntimePersistenceService
+from app.reports import get_report_definition
 from app.schemas.agent import AgentState, IntentType, LLMErrorCategory, RunStatus
 from app.schemas.calculations import ComputeMetricsRequest
-from app.schemas.reports import ReportFilters, ReportRequest, ReportType
-from app.schemas.tools import AccessStatus, RunReportRequest
+from app.schemas.reports import ReportFilterKey, ReportFilters, ReportRequest, ReportType
+from app.schemas.tools import (
+    AccessStatus,
+    ResolveFilterValueRequest,
+    ResolveFilterValueStatus,
+    RunReportRequest,
+)
 
 _DATE_RANGE_PATTERN = re.compile(r"(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})")
 _AUTHORIZATION_BLOCKED_WARNING = "authorization_blocked_report_not_allowed"
 _INTERPRET_RATE_LIMIT_FALLBACK_WARNING = "interpretation_rate_limit_fallback"
+_INTERPRET_LLM_FALLBACK_WARNING = "interpretation_llm_fallback"
+_FILTER_RESOLUTION_LLM_WARNING = "filter_resolution_llm_used"
 _MAX_MULTI_REPORTS = 3
+_FILTER_MATCH_CONFIDENCE_THRESHOLD = 0.75
+_FILTER_FIELD_BY_KEY = {
+    ReportFilterKey.SOURCE: "source",
+    ReportFilterKey.COURIER: "courier",
+    ReportFilterKey.LOCATION: "location",
+    ReportFilterKey.PHONE_NUMBER: "phone_number",
+}
 _DEFAULT_CLARIFICATION_QUESTIONS = {
     CLARIFICATION_FALLBACK_QUESTION,
     "Please provide a date range using YYYY-MM-DD to YYYY-MM-DD.",
@@ -251,6 +269,27 @@ _LOCALIZED_METRIC_LABELS: dict[str, dict[str, str]] = {
     },
 }
 
+_LOCALIZED_FILTER_LABELS: dict[str, dict[ReportFilterKey, str]] = {
+    "en": {
+        ReportFilterKey.SOURCE: "source",
+        ReportFilterKey.COURIER: "courier",
+        ReportFilterKey.LOCATION: "location",
+        ReportFilterKey.PHONE_NUMBER: "phone number",
+    },
+    "hy": {
+        ReportFilterKey.SOURCE: "աղբյուրը",
+        ReportFilterKey.COURIER: "առաքիչը",
+        ReportFilterKey.LOCATION: "հասցեն",
+        ReportFilterKey.PHONE_NUMBER: "հեռախոսահամարը",
+    },
+    "ru": {
+        ReportFilterKey.SOURCE: "источник",
+        ReportFilterKey.COURIER: "курьера",
+        ReportFilterKey.LOCATION: "локацию",
+        ReportFilterKey.PHONE_NUMBER: "номер телефона",
+    },
+}
+
 
 def _response_language(question: str) -> str:
     if re.search(r"[\u0531-\u0556\u0561-\u0587]", question):
@@ -278,9 +317,109 @@ def _localized_report_name(state: AgentState, report_id: ReportType) -> str:
     return _LOCALIZED_REPORT_NAMES[language].get(report_id.value, report_id.value)
 
 
+def _localized_filter_label(state: AgentState, filter_key: ReportFilterKey) -> str:
+    language = _response_language(state.user_question)
+    return _LOCALIZED_FILTER_LABELS[language][filter_key]
+
+
+def _optional_filter_keys(report_id: ReportType | None) -> set[ReportFilterKey]:
+    if report_id is None:
+        return set()
+    definition = get_report_definition(report_id)
+    return set(definition.optional_filters)
+
+
+def _non_null_filter_count(filters: ReportFilters | None) -> int:
+    if filters is None:
+        return 0
+    return sum(
+        1
+        for field_name in _FILTER_FIELD_BY_KEY.values()
+        if getattr(filters, field_name) is not None
+    )
+
+
+def _strip_incompatible_filters(
+    report_id: ReportType | None,
+    filters: ReportFilters | None,
+) -> ReportFilters | None:
+    if filters is None or report_id is None:
+        return filters
+
+    allowed = _optional_filter_keys(report_id)
+    filter_updates = {
+        field_name: None
+        for filter_key, field_name in _FILTER_FIELD_BY_KEY.items()
+        if filter_key not in allowed and getattr(filters, field_name) is not None
+    }
+    if not filter_updates:
+        return filters
+    return filters.model_copy(update=filter_updates)
+
+
+def _format_applied_filters(state: AgentState, filters: ReportFilters) -> str:
+    parts = [
+        f"{_localized_filter_label(state, filter_key)}={getattr(filters, field_name)}"
+        for filter_key, field_name in _FILTER_FIELD_BY_KEY.items()
+        if getattr(filters, field_name) is not None
+    ]
+    if not parts:
+        return ""
+
+    language = _response_language(state.user_question)
+    joined = ", ".join(parts)
+    if language == "hy":
+        return f" Ֆիլտրեր՝ {joined}։"
+    if language == "ru":
+        return f" Фильтры: {joined}."
+    return f" Filters: {joined}."
+
+
 def _localized_metric_label(state: AgentState, label: str) -> str:
     language = _response_language(state.user_question)
     return _LOCALIZED_METRIC_LABELS[language].get(label, label)
+
+
+def _build_filter_clarification_question(
+    state: AgentState,
+    *,
+    filter_key: ReportFilterKey,
+    raw_value: str,
+    candidates: list[str],
+) -> str:
+    label = _localized_filter_label(state, filter_key)
+    language = _response_language(state.user_question)
+    if candidates:
+        joined_candidates = ", ".join(candidates)
+        if language == "hy":
+            return (
+                f'Չկարողացա հստակ համադրել {label} "{raw_value}" արժեքը։ '
+                f'Նկատի ունե՞ք սրանցից մեկը՝ {joined_candidates}։'
+            )
+        if language == "ru":
+            return (
+                f'Не удалось уверенно сопоставить {label} "{raw_value}". '
+                f'Вы имели в виду одно из следующих значений: {joined_candidates}?'
+            )
+        return (
+            f'I could not confidently match the {label} "{raw_value}". '
+            f'Did you mean one of these values: {joined_candidates}?'
+        )
+
+    if language == "hy":
+        return (
+            f'Չգտա ճշգրիտ {label} "{raw_value}" արժեք։ '
+            "Նշեք այն ճիշտ ձևով, ինչպես կա տվյալներում։"
+        )
+    if language == "ru":
+        return (
+            f'Не удалось найти точное значение {label} "{raw_value}". '
+            "Укажите его в точном виде, как оно записано в данных."
+        )
+    return (
+        f'I could not find an exact {label} value for "{raw_value}". '
+        "Please provide it exactly as it appears in your data."
+    )
 
 
 def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
@@ -294,6 +433,51 @@ class QuerySlots:
     metric: str | None = None
     entity: str | None = None
     source: str | None = None
+    courier: str | None = None
+    location: str | None = None
+    phone_number: str | None = None
+
+
+def _is_delivery_count_question(text: str) -> bool:
+    if _contains_any(
+        text,
+        (
+            "delivery fee",
+            "shipping fee",
+            "стоимость доставки",
+            "առաքման վճար",
+            "առաքման գումար",
+        ),
+    ):
+        return False
+    return _contains_any(
+        text,
+        ("delivery", "deliveries", "достав", "առաք"),
+    ) and _contains_any(
+        text,
+        ("how many", "number of", "count", "сколько", "колич", "քանի"),
+    )
+
+
+def _normalize_entity_token(value: str) -> str:
+    normalized = (
+        value.strip()
+        .lower()
+        .replace("֊", "-")
+        .replace("–", "-")
+        .replace("—", "-")
+    )
+    normalized = " ".join(normalized.split())
+    return normalized.removesuffix("ը").strip()
+
+
+def _normalize_phone_token(value: str) -> str | None:
+    digits = "".join(ch for ch in value if ch.isdigit())
+    if len(digits) < 6 or len(digits) > 15:
+        return None
+    if digits.startswith("374") and len(digits) in {11, 12}:
+        return f"0{digits[3:]}"
+    return digits
 
 
 def _extract_top_n(question: str) -> int | None:
@@ -314,13 +498,22 @@ def _extract_top_n(question: str) -> int | None:
 
 def _extract_group_by(question: str) -> str | None:
     text = question.lower()
-    if _contains_any(text, ("by source", "source mix", "по источ", "ըստ աղբյուր")):
+    if _contains_any(
+        text,
+        ("by source", "source mix", "channel mix", "by channel", "по источ", "ըստ աղբյուր"),
+    ):
         return "source"
-    if _contains_any(text, ("by courier", "курьер", "ըստ առաքիչ")):
+    if _contains_any(
+        text,
+        ("by courier", "by driver", "courier split", "курьер", "ըստ առաքիչ"),
+    ):
         return "courier"
     if _contains_any(text, ("by weekday", "day of week", "дням недели", "շաբաթվա օր")):
         return "weekday"
-    if _contains_any(text, ("by address", "top address", "топ адрес", "ըստ հասցե")):
+    if _contains_any(
+        text,
+        ("by address", "by location", "top address", "топ адрес", "ըստ հասցե"),
+    ):
         return "location"
     if _contains_any(text, ("by customer", "топ клиент", "ըստ հաճախորդ")):
         return "customer"
@@ -331,17 +524,51 @@ def _extract_metric(question: str) -> str | None:
     text = question.lower()
     if _contains_any(
         text,
-        ("average check", "avg check", "average ticket", "средний чек", "միջին չեկ"),
+        (
+            "average check",
+            "avg check",
+            "average ticket",
+            "average order value",
+            "basket size",
+            "средний чек",
+            "средняя сумма заказа",
+            "միջին չեկ",
+            "միջին պատվերի արժեք",
+        ),
     ):
         return "average_check"
     if _contains_any(
         text,
-        ("gross profit", "gross margin", "валовая прибыль", "համախառն շահույթ"),
+        (
+            "gross profit",
+            "gross margin",
+            "margin",
+            "валовая прибыль",
+            "валовая маржа",
+            "համախառն շահույթ",
+            "մարժա",
+        ),
     ):
         return "gross_profit"
+    if _is_delivery_count_question(text):
+        return "order_count"
     if _contains_any(text, ("order count", "number of orders", "сколько заказ", "քանի պատվ")):
         return "order_count"
-    if _contains_any(text, ("total sales", "total revenue", "общие продажи", "ընդհանուր վաճառ")):
+    if _contains_any(
+        text,
+        (
+            "total sales",
+            "total revenue",
+            "revenue",
+            "turnover",
+            "sales amount",
+            "общие продажи",
+            "выручка",
+            "оборот",
+            "ընդհանուր վաճառ",
+            "շրջանառություն",
+        ),
+    ):
         return "sales_total"
     if _contains_any(
         text,
@@ -373,7 +600,12 @@ def _extract_entity(question: str) -> str | None:
 
 
 def _extract_source_filter(question: str) -> str | None:
-    source_match = re.search(r"source\s*[:=]\s*([a-zA-Z0-9_ -]+)", question, re.IGNORECASE)
+    source_match = re.search(
+        r"(?:source|channel|platform|источник|աղբյուր)\s*(?:[:=]\s*|\s+)"
+        r"([^\n,.;!?]+?)(?=\s+\d{4}-\d{2}-\d{2}\b|$|[,.!?;])",
+        question,
+        re.IGNORECASE,
+    )
     if source_match is not None:
         source = source_match.group(1).strip().lower().replace(" ", "_")
         return source or None
@@ -387,6 +619,79 @@ def _extract_source_filter(question: str) -> str | None:
     return None
 
 
+def _extract_courier_filter(question: str) -> str | None:
+    explicit_match = re.search(
+        r"(?:courier|driver|курьер|առաքիչ)\s*(?:[:=]\s*|\s+)"
+        r"([^\n,.;!?]+?)(?=\s+\d{4}-\d{2}-\d{2}\b|$|[,.!?;])",
+        question,
+        re.IGNORECASE,
+    )
+    if explicit_match is not None:
+        candidate = _normalize_entity_token(explicit_match.group(1))
+        return candidate or None
+
+    trailing_name_match = re.search(
+        r"^\s*([A-Za-z\u0531-\u0556\u0561-\u0587]{2,})\s*(?:ը)?\s+քանի\s+հատ\s+առաք",
+        question.lower(),
+    )
+    if trailing_name_match is not None:
+        candidate = _normalize_entity_token(trailing_name_match.group(1))
+        return candidate or None
+
+    return None
+
+
+def _extract_location_filter(question: str) -> str | None:
+    explicit_match = re.search(
+        r"(?:address|location|адрес|локац|հասցե)\s*(?:[:=]\s*|\s+)"
+        r"([^\n,.;!?]+?)(?=\s+\d{4}-\d{2}-\d{2}\b|$|[,.!?;])",
+        question,
+        re.IGNORECASE,
+    )
+    if explicit_match is not None:
+        candidate = _normalize_entity_token(explicit_match.group(1))
+        return candidate or None
+
+    locative_match = re.search(
+        r"([A-Za-z\u0531-\u0556\u0561-\u05870-9\-\s]{3,}?)\s*[֊\-]?ում\b",
+        question,
+    )
+    if locative_match is None:
+        return None
+
+    candidate = _normalize_entity_token(locative_match.group(1))
+    if not candidate:
+        return None
+
+    if any(ch.isdigit() for ch in candidate):
+        return candidate
+
+    if _contains_any(candidate, ("street", "ave", "просп", "փողոց", "ул.")):
+        return candidate
+
+    return None
+
+
+def _extract_phone_filter(question: str) -> str | None:
+    explicit_match = re.search(
+        r"(?:phone|tel|mobile|հեռախոս|номер)\s*(?:[:=]\s*|\s+)?([+\d\-\s()]{6,24})",
+        question,
+        re.IGNORECASE,
+    )
+    if explicit_match is not None:
+        return _normalize_phone_token(explicit_match.group(1))
+
+    contextual_match = re.search(
+        r"(\+?\d[\d\-\s()]{5,20}\d)\s*(?:համար(?:ից)?|phone|tel|номер(?:а)?)",
+        question,
+        re.IGNORECASE,
+    )
+    if contextual_match is not None:
+        return _normalize_phone_token(contextual_match.group(1))
+
+    return None
+
+
 def _extract_query_slots(question: str) -> QuerySlots:
     return QuerySlots(
         top_n=_extract_top_n(question),
@@ -394,12 +699,16 @@ def _extract_query_slots(question: str) -> QuerySlots:
         metric=_extract_metric(question),
         entity=_extract_entity(question),
         source=_extract_source_filter(question),
+        courier=_extract_courier_filter(question),
+        location=_extract_location_filter(question),
+        phone_number=_extract_phone_filter(question),
     )
 
 
 def _detect_report_candidates(question: str) -> list[ReportType]:
     text = question.lower()
     candidates: list[ReportType] = []
+    delivery_count_question = _is_delivery_count_question(text)
 
     def add(report_id: ReportType) -> None:
         if report_id not in candidates:
@@ -421,6 +730,7 @@ def _detect_report_candidates(question: str) -> list[ReportType]:
         (
             "gross profit",
             "gross margin",
+            "margin",
             "валовая прибыль",
             "валовая маржа",
             "համախառն շահույթ",
@@ -476,7 +786,9 @@ def _detect_report_candidates(question: str) -> list[ReportType]:
         ),
     ):
         add(ReportType.PAYMENT_COLLECTION)
-    if _contains_any(
+    if delivery_count_question:
+        add(ReportType.ORDER_COUNT)
+    if (not delivery_count_question) and _contains_any(
         text,
         (
             "delivery fee",
@@ -531,6 +843,7 @@ def _detect_report_candidates(question: str) -> list[ReportType]:
         (
             "sales by courier",
             "by courier",
+            "by driver",
             "courier performance",
             "курьер",
             "առաքիչ",
@@ -544,6 +857,8 @@ def _detect_report_candidates(question: str) -> list[ReportType]:
             "by source",
             "source mix",
             "channel mix",
+            "by channel",
+            "by platform",
             "по источ",
             "աղբյուր",
         ),
@@ -555,8 +870,12 @@ def _detect_report_candidates(question: str) -> list[ReportType]:
             "average check",
             "avg check",
             "average ticket",
+            "average order value",
+            "basket size",
             "средний чек",
+            "средняя сумма заказа",
             "միջին չեկ",
+            "միջին պատվերի արժեք",
         ),
     ):
         add(ReportType.AVERAGE_CHECK)
@@ -575,8 +894,14 @@ def _detect_report_candidates(question: str) -> list[ReportType]:
         (
             "total sales",
             "total revenue",
+            "revenue",
+            "turnover",
+            "sales amount",
             "общие продажи",
+            "выручка",
+            "оборот",
             "ընդհանուր վաճառ",
+            "շրջանառություն",
         ),
     ):
         add(ReportType.SALES_TOTAL)
@@ -612,6 +937,8 @@ def _map_slots_to_report(slots: QuerySlots) -> ReportType | None:
     }
     if slots.metric in metric_to_report:
         return metric_to_report[slots.metric]
+    if slots.phone_number is not None:
+        return ReportType.ORDER_COUNT
 
     entity_to_report = {
         "source": ReportType.SALES_BY_SOURCE,
@@ -973,8 +1300,20 @@ def _generate_interpretation_payload(question: str) -> dict[str, Any]:
             "reasoning_notes": "Report candidate detected but required date range is missing.",
         }
 
-    if selected_report_id is ReportType.SALES_BY_SOURCE and slots.source:
-        filters = filters.model_copy(update={"source": slots.source})
+    filter_updates: dict[str, str] = {}
+    if slots.source:
+        filter_updates["source"] = slots.source
+    if slots.courier:
+        filter_updates["courier"] = slots.courier
+    if slots.location:
+        filter_updates["location"] = slots.location
+    if slots.phone_number:
+        filter_updates["phone_number"] = slots.phone_number
+    if filter_updates:
+        filters = _strip_incompatible_filters(
+            selected_report_id,
+            filters.model_copy(update=filter_updates),
+        ) or filters
 
     intent = (
         IntentType.BREAKDOWN_KPI
@@ -991,13 +1330,34 @@ def _generate_interpretation_payload(question: str) -> dict[str, Any]:
         "reasoning_notes": (
             "Report and filters identified with deterministic slot extraction: "
             f"group_by={slots.group_by}, metric={slots.metric}, entity={slots.entity}, "
-            f"top_n={slots.top_n}, source={slots.source}."
+            f"top_n={slots.top_n}, source={slots.source}, courier={slots.courier}, "
+            f"location={slots.location}, phone_number={slots.phone_number}."
         ),
     }
 
 
-def _should_query_llm(deterministic_payload: dict[str, Any]) -> bool:
-    return deterministic_payload.get("intent") == IntentType.UNSUPPORTED_REQUEST
+def _should_query_llm(
+    deterministic_payload: dict[str, Any],
+    *,
+    slots: QuerySlots,
+    additional_report_ids: list[ReportType],
+) -> bool:
+    intent = deterministic_payload.get("intent")
+    if intent in {IntentType.UNSUPPORTED_REQUEST, IntentType.NEEDS_CLARIFICATION}:
+        return True
+    if additional_report_ids:
+        return True
+    return any(
+        value is not None
+        for value in (
+            slots.group_by,
+            slots.entity,
+            slots.source,
+            slots.courier,
+            slots.location,
+            slots.phone_number,
+        )
+    )
 
 
 def _interpret_request_with_llm(
@@ -1008,6 +1368,158 @@ def _interpret_request_with_llm(
     output_text = llm_client.generate_text(messages=messages)
     interpretation = parse_interpretation_output_json(output_text)
     return interpretation.model_dump(mode="python")
+
+
+def _select_interpretation(
+    deterministic: Any,
+    llm_output: Any | None,
+) -> Any:
+    if llm_output is None:
+        return deterministic
+
+    deterministic_executable = (
+        deterministic.intent in {IntentType.GET_KPI, IntentType.BREAKDOWN_KPI}
+        and not deterministic.needs_clarification
+        and deterministic.report_id is not None
+        and deterministic.filters is not None
+    )
+    llm_executable = (
+        llm_output.intent in {IntentType.GET_KPI, IntentType.BREAKDOWN_KPI}
+        and not llm_output.needs_clarification
+        and llm_output.report_id is not None
+        and llm_output.filters is not None
+    )
+
+    if not deterministic_executable and llm_executable:
+        return llm_output
+    if deterministic_executable and not llm_executable:
+        return deterministic
+    if not deterministic_executable and not llm_executable:
+        if (
+            deterministic.intent is IntentType.UNSUPPORTED_REQUEST
+            and llm_output.intent is not IntentType.UNSUPPORTED_REQUEST
+        ):
+            return llm_output
+        return deterministic
+    if llm_output.report_id != deterministic.report_id:
+        return deterministic
+    if _non_null_filter_count(llm_output.filters) > _non_null_filter_count(deterministic.filters):
+        return llm_output
+    if llm_output.confidence >= deterministic.confidence + 0.1:
+        return llm_output
+    return deterministic
+
+
+def _resolvable_filter_values(
+    report_id: ReportType,
+    filters: ReportFilters,
+) -> list[tuple[ReportFilterKey, str, str]]:
+    return [
+        (filter_key, field_name, raw_value)
+        for filter_key, field_name in _FILTER_FIELD_BY_KEY.items()
+        if filter_key in _optional_filter_keys(report_id)
+        and (raw_value := getattr(filters, field_name)) is not None
+    ]
+
+
+def _resolve_filter_value_with_llm(
+    state: AgentState,
+    *,
+    filter_key: ReportFilterKey,
+    raw_value: str,
+    candidates: list[str],
+) -> str | None:
+    if not candidates or filter_key is ReportFilterKey.PHONE_NUMBER:
+        return None
+
+    try:
+        llm_client = get_llm_client()
+    except ValueError:
+        return None
+
+    try:
+        output_text = llm_client.generate_text(
+            messages=build_filter_match_messages(
+                user_question=state.user_question,
+                filter_key=filter_key.value,
+                raw_value=raw_value,
+                candidates=candidates,
+            )
+        )
+        resolution = parse_filter_match_output_json(output_text, candidates=candidates)
+    except (LLMClientError, FilterMatchContractError):
+        return None
+
+    if resolution.matched_value is None:
+        return None
+    if resolution.confidence < _FILTER_MATCH_CONFIDENCE_THRESHOLD:
+        return None
+    return resolution.matched_value
+
+
+def _resolve_report_filters(state: AgentState) -> dict[str, Any]:
+    report_id = state.selected_report_id
+    filters = state.filters
+    if report_id is None or filters is None:
+        return {}
+
+    resolved_filters = filters
+    warnings = [*state.warnings]
+    for filter_key, field_name, raw_value in _resolvable_filter_values(report_id, filters):
+        try:
+            resolution_response = resolve_filter_value_tool(
+                ResolveFilterValueRequest(
+                    report_id=report_id,
+                    filter_key=filter_key,
+                    raw_value=raw_value,
+                )
+            )
+        except Exception:
+            return {
+                "status": RunStatus.FAILED,
+                "final_answer": _localized_message(state, "run_failed_internal"),
+                "warnings": [*warnings, "filter_resolution_failed"],
+            }
+
+        if (
+            resolution_response.status is ResolveFilterValueStatus.RESOLVED
+            and resolution_response.matched_value is not None
+        ):
+            resolved_filters = resolved_filters.model_copy(
+                update={field_name: resolution_response.matched_value}
+            )
+            continue
+
+        llm_matched_value = _resolve_filter_value_with_llm(
+            state,
+            filter_key=filter_key,
+            raw_value=raw_value,
+            candidates=resolution_response.candidates,
+        )
+        if llm_matched_value is not None:
+            resolved_filters = resolved_filters.model_copy(
+                update={field_name: llm_matched_value}
+            )
+            warnings.append(f"{_FILTER_RESOLUTION_LLM_WARNING}:{filter_key.value}")
+            continue
+
+        return {
+            "status": RunStatus.CLARIFY,
+            "filters": resolved_filters,
+            "warnings": warnings,
+            "needs_clarification": True,
+            "clarification_question": _build_filter_clarification_question(
+                state,
+                filter_key=filter_key,
+                raw_value=raw_value,
+                candidates=resolution_response.candidates,
+            ),
+        }
+
+    return {
+        "filters": resolved_filters,
+        "warnings": warnings,
+    }
 
 
 def _resolve_scope_node(state: AgentState) -> dict[str, Any]:
@@ -1030,25 +1542,37 @@ def _openai_interpret_node(state: AgentState) -> dict[str, Any]:
     _, additional_report_ids, multi_intent_truncated = _resolve_report_ids(state.user_question)
     deterministic_interpretation = _generate_interpretation_payload(state.user_question)
     try:
-        raw_interpretation = deterministic_interpretation
-        if _should_query_llm(deterministic_interpretation):
+        deterministic_output = validate_interpretation_output(deterministic_interpretation)
+        llm_output = None
+        if _should_query_llm(
+            deterministic_interpretation,
+            slots=slots,
+            additional_report_ids=additional_report_ids,
+        ):
             try:
                 llm_client = get_llm_client()
             except ValueError:
-                raw_interpretation = deterministic_interpretation
+                llm_output = None
             else:
                 try:
-                    raw_interpretation = _interpret_request_with_llm(
-                        state.user_question,
-                        llm_client,
+                    llm_output = validate_interpretation_output(
+                        _interpret_request_with_llm(
+                            state.user_question,
+                            llm_client,
+                        )
                     )
+                except InterpretationContractError:
+                    llm_output = None
+                    warnings.append("llm_interpretation_contract_invalid")
                 except LLMClientError as exc:
-                    if exc.category is not LLMErrorCategory.RATE_LIMIT:
-                        raise
-                    raw_interpretation = deterministic_interpretation
-                    warnings.append(_INTERPRET_RATE_LIMIT_FALLBACK_WARNING)
+                    llm_output = None
+                    warnings.append(
+                        _INTERPRET_RATE_LIMIT_FALLBACK_WARNING
+                        if exc.category is LLMErrorCategory.RATE_LIMIT
+                        else _INTERPRET_LLM_FALLBACK_WARNING
+                    )
 
-        interpretation = validate_interpretation_output(raw_interpretation)
+        interpretation = _select_interpretation(deterministic_output, llm_output)
     except InterpretationContractError:
         return {
             "intent": IntentType.NEEDS_CLARIFICATION,
@@ -1062,14 +1586,10 @@ def _openai_interpret_node(state: AgentState) -> dict[str, Any]:
     if multi_intent_truncated:
         warnings.append("multi_intent_truncated")
 
-    if (
-        interpretation.report_id is not ReportType.SALES_BY_SOURCE
-        and interpretation.filters is not None
-        and interpretation.filters.source is not None
-    ):
-        interpretation_filters = interpretation.filters.model_copy(update={"source": None})
-    else:
-        interpretation_filters = interpretation.filters
+    interpretation_filters = _strip_incompatible_filters(
+        interpretation.report_id,
+        interpretation.filters,
+    )
 
     additional_report_ids = [
         report_id
@@ -1137,7 +1657,17 @@ def _authorize_report_node(state: AgentState) -> dict[str, Any]:
             "warnings": [*state.warnings, _AUTHORIZATION_BLOCKED_WARNING],
         }
 
-    return {"status": RunStatus.RUNNING}
+    filter_resolution_update = _resolve_report_filters(state)
+    if filter_resolution_update.get("status") in {
+        RunStatus.CLARIFY,
+        RunStatus.FAILED,
+    }:
+        return filter_resolution_update
+
+    return {
+        **filter_resolution_update,
+        "status": RunStatus.RUNNING,
+    }
 
 
 def _select_authorization_route(state: AgentState) -> str:
@@ -1165,11 +1695,7 @@ def _run_report_node(state: AgentState) -> dict[str, Any]:
         }
 
     def _filters_for_report(report_id: ReportType, filters: ReportFilters) -> ReportFilters:
-        if report_id is ReportType.SALES_BY_SOURCE:
-            return filters
-        if filters.source is None:
-            return filters
-        return filters.model_copy(update={"source": None})
+        return _strip_incompatible_filters(report_id, filters) or filters
 
     run_request = RunReportRequest(
         user_id=state.scope_request.user_id,
@@ -1368,6 +1894,7 @@ def _compose_single_report_summary(
         date_to=filters.date_to,
         metrics=metrics_text,
     )
+    final_answer = f"{final_answer}{_format_applied_filters(state, filters)}"
 
     if not include_derived:
         return final_answer

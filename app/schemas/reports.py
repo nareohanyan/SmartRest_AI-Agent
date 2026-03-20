@@ -31,12 +31,18 @@ class ReportFilterKey(str, Enum):
     DATE_FROM = "date_from"
     DATE_TO = "date_to"
     SOURCE = "source"
+    COURIER = "courier"
+    LOCATION = "location"
+    PHONE_NUMBER = "phone_number"
 
 
 class ReportFilters(SchemaModel):
     date_from: date
     date_to: date
     source: str | None = Field(default=None, min_length=1)
+    courier: str | None = Field(default=None, min_length=1)
+    location: str | None = Field(default=None, min_length=1)
+    phone_number: str | None = Field(default=None, min_length=6)
 
     @model_validator(mode="after")
     def validate_date_range(self) -> ReportFilters:

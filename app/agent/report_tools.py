@@ -11,13 +11,16 @@ from app.reports import (
     list_report_definitions,
     run_mock_report,
 )
-from app.reports.excel_backend import run_excel_report
+from app.reports.excel_backend import resolve_excel_filter_value, run_excel_report
+from app.reports.mock_backend import resolve_mock_filter_value
 from app.schemas.tools import (
     AccessStatus,
     GetReportDefinitionRequest,
     GetReportDefinitionResponse,
     ListReportsRequest,
     ListReportsResponse,
+    ResolveFilterValueRequest,
+    ResolveFilterValueResponse,
     ResolveScopeRequest,
     ResolveScopeResponse,
     RunReportRequest,
@@ -69,3 +72,19 @@ def run_report_tool(request: RunReportRequest) -> RunReportResponse:
             sheet_name=settings.excel_report_sheet_name,
         )
     return run_mock_report(request.request)
+
+
+def resolve_filter_value_tool(request: ResolveFilterValueRequest) -> ResolveFilterValueResponse:
+    """Resolve a raw filter mention against backend-backed canonical values."""
+    settings = get_settings()
+    excel_path = settings.excel_report_file_path
+    if excel_path and excel_path.strip():
+        path = Path(excel_path)
+        if not path.exists():
+            raise ValueError(f"Excel report file not found: {path}")
+        return resolve_excel_filter_value(
+            request,
+            file_path=path,
+            sheet_name=settings.excel_report_sheet_name,
+        )
+    return resolve_mock_filter_value(request)

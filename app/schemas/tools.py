@@ -5,7 +5,13 @@ from enum import Enum
 from pydantic import Field, model_validator
 
 from app.schemas.base import SchemaModel
-from app.schemas.reports import ReportDefinition, ReportRequest, ReportResult, ReportType
+from app.schemas.reports import (
+    ReportDefinition,
+    ReportFilterKey,
+    ReportRequest,
+    ReportResult,
+    ReportType,
+)
 
 
 class AccessStatus(str, Enum):
@@ -65,3 +71,29 @@ class RunReportRequest(SchemaModel):
 class RunReportResponse(SchemaModel):
     result: ReportResult
     warnings: list[str] = Field(default_factory=list)
+
+
+class ResolveFilterValueStatus(str, Enum):
+    RESOLVED = "resolved"
+    UNRESOLVED = "unresolved"
+    UNSUPPORTED = "unsupported"
+
+
+class ResolveFilterValueRequest(SchemaModel):
+    report_id: ReportType
+    filter_key: ReportFilterKey
+    raw_value: str = Field(min_length=1)
+
+
+class ResolveFilterValueResponse(SchemaModel):
+    status: ResolveFilterValueStatus
+    matched_value: str | None = None
+    candidates: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_contract(self) -> ResolveFilterValueResponse:
+        if self.status is ResolveFilterValueStatus.RESOLVED and self.matched_value is None:
+            raise ValueError("matched_value is required when status=resolved")
+        if self.status is not ResolveFilterValueStatus.RESOLVED and self.matched_value is not None:
+            raise ValueError("matched_value must be null unless status=resolved")
+        return self
