@@ -176,9 +176,9 @@ def test_multi_intent_request_returns_structured_multi_block_answer(
         assert final_state.status is RunStatus.COMPLETED
         assert len(final_state.additional_run_reports) == 1
         assert final_state.final_answer is not None
-        assert "Multi-report response:" in final_state.final_answer
         assert "\n1. " in final_state.final_answer
         assert "\n2. " in final_state.final_answer
+        assert "Multi-report response:" not in final_state.final_answer
     finally:
         get_settings.cache_clear()
 
@@ -336,6 +336,48 @@ def test_extract_filters_supports_armenian_relative_period(
     assert filters is not None
     assert filters.date_from == date(2026, 1, 1)
     assert filters.date_to == date(2026, 3, 19)
+
+
+def test_extract_filters_supports_armenian_month_suffix_relative_period(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(graph_module, "_today", lambda: date(2026, 3, 19))
+
+    filters = graph_module._extract_filters("Կարո՞ղ ես ցույց տալ վերջին 3 ամսվա ընդհանուր վաճառքը")
+
+    assert filters is not None
+    assert filters.date_from == date(2026, 1, 1)
+    assert filters.date_to == date(2026, 3, 19)
+
+
+def test_extract_filters_supports_this_quarter(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(graph_module, "_today", lambda: date(2026, 3, 19))
+
+    filters = graph_module._extract_filters("Can you show average check for this quarter?")
+
+    assert filters is not None
+    assert filters.date_from == date(2026, 1, 1)
+    assert filters.date_to == date(2026, 3, 19)
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Ցույց տուր անցած տարվա միջին չեկը",
+        "Ցույց տուր նախորդ տարվա միջին չեկը",
+    ],
+)
+def test_extract_filters_supports_armenian_last_year_variants(
+    monkeypatch: pytest.MonkeyPatch,
+    question: str,
+) -> None:
+    monkeypatch.setattr(graph_module, "_today", lambda: date(2026, 3, 19))
+
+    filters = graph_module._extract_filters(question)
+
+    assert filters is not None
+    assert filters.date_from == date(2025, 1, 1)
+    assert filters.date_to == date(2025, 12, 31)
 
 
 @pytest.mark.parametrize(

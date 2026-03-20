@@ -709,6 +709,18 @@ def _first_day_of_month(day: date) -> date:
     return day.replace(day=1)
 
 
+def _quarter_start(day: date) -> date:
+    quarter_start_month = ((day.month - 1) // 3) * 3 + 1
+    return date(day.year, quarter_start_month, 1)
+
+
+def _previous_quarter_range(day: date) -> tuple[date, date]:
+    current_quarter_start = _quarter_start(day)
+    previous_quarter_end = current_quarter_start - timedelta(days=1)
+    previous_quarter_start = _quarter_start(previous_quarter_end)
+    return previous_quarter_start, previous_quarter_end
+
+
 def _shift_month_start(month_start: date, delta_months: int) -> date:
     month_index = (month_start.year * 12 + (month_start.month - 1)) + delta_months
     shifted_year = month_index // 12
@@ -739,7 +751,7 @@ def _extract_relative_filters(question: str, *, today: date) -> ReportFilters | 
     month_patterns = (
         r"\b(?:last|past)\s+(?P<n>\d{1,3})\s+months?\b",
         r"\b(?:последн(?:ие|их)|за)\s+(?P<n>\d{1,3})\s+месяц(?:а|ев)?\b",
-        r"վերջին\s+(?P<n>\d{1,3})\s+ամիս",
+        r"վերջին\s+(?P<n>\d{1,3})\s+ամ(?:իս|ս)(?:վա|ների)?",
     )
     year_patterns = (
         r"\b(?:last|past)\s+(?P<n>\d{1,3})\s+years?\b",
@@ -858,6 +870,30 @@ def _extract_relative_filters(question: str, *, today: date) -> ReportFilters | 
 
     if _contains_any(
         text,
+        (
+            "this quarter",
+            "current quarter",
+            "этот квартал",
+            "текущий квартал",
+            "այս եռամսյակ",
+        ),
+    ):
+        return _build_filters(_quarter_start(today), today)
+    if _contains_any(
+        text,
+        (
+            "last quarter",
+            "previous quarter",
+            "прошлый квартал",
+            "предыдущий квартал",
+            "նախորդ եռամսյակ",
+        ),
+    ):
+        quarter_start, quarter_end = _previous_quarter_range(today)
+        return _build_filters(quarter_start, quarter_end)
+
+    if _contains_any(
+        text,
         ("this year", "current year", "этот год", "этом году", "այս տարի"),
     ):
         return _build_filters(date(today.year, 1, 1), today)
@@ -871,6 +907,9 @@ def _extract_relative_filters(question: str, *, today: date) -> ReportFilters | 
             "предыдущий год",
             "предыдущем году",
             "նախորդ տարի",
+            "նախորդ տարվա",
+            "անցած տարի",
+            "անցած տարվա",
         ),
     ):
         return _build_filters(date(today.year - 1, 1, 1), date(today.year - 1, 12, 31))
@@ -1381,7 +1420,7 @@ def _compose_output_node(state: AgentState) -> dict[str, Any]:
             f"{index}. {block}"
             for index, block in enumerate(blocks, start=1)
         )
-        final_answer = f"{_localized_message(state, 'multi_report_header')}\n{numbered_blocks}"
+        final_answer = numbered_blocks
 
     return {
         "status": RunStatus.COMPLETED,
