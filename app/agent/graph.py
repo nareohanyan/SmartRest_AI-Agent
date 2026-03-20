@@ -60,12 +60,8 @@ def _question_language(question: str) -> str:
 
 def _smalltalk_answer(language: str) -> str:
     if language == "hy":
-        return (
-            "Ողջու՜յն։ Ինչպե՞ս կարող եմ օգնել ձեզ։"
-        )
-    return (
-        "Hello. How can i help you? "
-    )
+        return "Ողջույն։ Ուրախ եմ տեսնել ձեզ այստեղ։"
+    return "Hello. Nice to see you here."
 
 
 def _safe_unsupported_answer(language: str) -> str:
@@ -74,7 +70,7 @@ def _safe_unsupported_answer(language: str) -> str:
             "Ցավոք ես չունեմ բավականաչափ ինֆորմացիա տվյալ հարցին պատասխանելու համար։ Ավելին իմանալու համար կարող եք զանգահարել 060 44 55 66։ "
         )
     return (
-        "Unfortunetly i don't have enough information to answer your question. For further question you can contact 060 44 55 66."
+        "Unfortunately i don't have enough information to answer your question. For further questions you can contact 060 44 55 66."
     )
 
 
@@ -620,18 +616,13 @@ def _safe_answer_node(state: AgentState) -> dict[str, Any]:
 
 def _smalltalk_node(state: AgentState) -> dict[str, Any]:
     language = _question_language(state.user_question)
-    fallback_answer = _smalltalk_answer(language)
-    final_answer, warnings = _render_answer_with_llm(
-        state=state,
-        route=PolicyRoute.SMALLTALK.value,
-        fallback_answer=fallback_answer,
-    )
+    final_answer = _smalltalk_answer(language)
     return {
-        "status": RunStatus.CLARIFY,
+        "status": RunStatus.ONBOARDING,
         "final_answer": final_answer,
-        "needs_clarification": True,
-        "clarification_question": final_answer,
-        "warnings": warnings,
+        "needs_clarification": False,
+        "clarification_question": None,
+        "warnings": state.warnings,
     }
 
 

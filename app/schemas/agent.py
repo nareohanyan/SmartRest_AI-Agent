@@ -31,6 +31,7 @@ class IntentType(str, Enum):
 class RunStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
+    ONBOARDING = "onboarding"
     CLARIFY = "clarify"
     REJECTED = "rejected"
     DENIED = "denied"

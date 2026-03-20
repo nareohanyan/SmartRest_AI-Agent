@@ -138,7 +138,7 @@ def test_unsupported_request_routes_to_safe_answer() -> None:
         "safe_answer",
     ]
     assert final_state.status is RunStatus.REJECTED
-    assert "smartrest analytics" in (final_state.final_answer or "").lower()
+    assert "060 44 55 66" in (final_state.final_answer or "")
 
 
 def test_smalltalk_in_armenian_routes_to_smalltalk_answer() -> None:
@@ -155,10 +155,10 @@ def test_smalltalk_in_armenian_routes_to_smalltalk_answer() -> None:
         "route_decision",
         "smalltalk",
     ]
-    assert final_state.status is RunStatus.CLARIFY
-    assert final_state.needs_clarification is True
-    assert "Բարև" in (final_state.final_answer or "")
-    assert final_state.clarification_question == final_state.final_answer
+    assert final_state.status is RunStatus.ONBOARDING
+    assert final_state.needs_clarification is False
+    assert final_state.final_answer == "Ողջույն։ Ուրախ եմ տեսնել ձեզ այստեղ։"
+    assert final_state.clarification_question is None
 
 
 def test_mixed_greeting_with_business_text_is_not_smalltalk() -> None:
@@ -299,12 +299,12 @@ def test_smalltalk_bypasses_llm_even_in_llm_mode(
 
     final_state = AgentState.model_validate(graph.invoke(_initial_state("բարև")))
 
-    assert len(fake_client.calls) == 1
-    assert final_state.status is RunStatus.CLARIFY
-    assert final_state.needs_clarification is True
+    assert len(fake_client.calls) == 0
+    assert final_state.status is RunStatus.ONBOARDING
+    assert final_state.needs_clarification is False
     assert final_state.policy_route is not None
     assert final_state.policy_route.value == "smalltalk"
-    assert "response_llm_fallback" in final_state.warnings
+    assert "response_llm_fallback" not in final_state.warnings
 
 
 def test_smalltalk_uses_llm_response_generation_when_available(
@@ -321,8 +321,8 @@ def test_smalltalk_uses_llm_response_generation_when_available(
 
     final_state = AgentState.model_validate(graph.invoke(_initial_state("բարև")))
 
-    assert len(fake_client.calls) == 1
-    assert final_state.status is RunStatus.CLARIFY
-    assert final_state.needs_clarification is True
-    assert final_state.final_answer == "Բարև, ինչպե՞ս կարող եմ օգնել SmartRest տվյալներով։"
-    assert final_state.clarification_question == final_state.final_answer
+    assert len(fake_client.calls) == 0
+    assert final_state.status is RunStatus.ONBOARDING
+    assert final_state.needs_clarification is False
+    assert final_state.final_answer == "Ողջույն։ Ուրախ եմ տեսնել ձեզ այստեղ։"
+    assert final_state.clarification_question is None

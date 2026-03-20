@@ -9,6 +9,8 @@ def map_runtime_status_to_db(status: RunStatus) -> tuple[DbRunStatus, str | None
         return "started", None
     if status is RunStatus.COMPLETED:
         return "completed", None
+    if status is RunStatus.ONBOARDING:
+        return "completed", "onboarding"
     if status is RunStatus.CLARIFY:
         return "clarification_needed", None
     if status is RunStatus.FAILED:

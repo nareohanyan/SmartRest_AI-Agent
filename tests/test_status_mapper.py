@@ -11,6 +11,7 @@ from app.schemas.agent import RunStatus
     [
         (RunStatus.RUNNING, "started", None),
         (RunStatus.COMPLETED, "completed", None),
+        (RunStatus.ONBOARDING, "completed", "onboarding"),
         (RunStatus.CLARIFY, "clarification_needed", None),
         (RunStatus.FAILED, "failed", "runtime_failed"),
         (RunStatus.REJECTED, "failed", "rejected"),
