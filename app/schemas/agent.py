@@ -97,6 +97,12 @@ class AgentState(SchemaModel):
         if self.status is RunStatus.CLARIFY and not self.needs_clarification:
             raise ValueError("status=clarify requires needs_clarification=true")
 
+        if self.status is RunStatus.ONBOARDING and self.needs_clarification:
+            raise ValueError("status=onboarding requires needs_clarification=false")
+
+        if self.status is RunStatus.ONBOARDING and self.clarification_question is not None:
+            raise ValueError("status=onboarding requires clarification_question=null")
+
         return self
 
 

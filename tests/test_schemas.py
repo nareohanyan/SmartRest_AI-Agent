@@ -147,6 +147,30 @@ def test_agent_state_extra_field_fails() -> None:
     )
 
 
+def test_agent_state_onboarding_disallows_clarification_flags() -> None:
+    payload = _agent_state_payload()
+    payload["status"] = "onboarding"
+    payload["needs_clarification"] = True
+    payload["clarification_question"] = "Please provide a date range."
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentState.model_validate(payload)
+
+    assert "status=onboarding requires needs_clarification=false" in str(exc_info.value)
+
+
+def test_agent_state_onboarding_disallows_clarification_question() -> None:
+    payload = _agent_state_payload()
+    payload["status"] = "onboarding"
+    payload["needs_clarification"] = False
+    payload["clarification_question"] = "Please provide a date range."
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentState.model_validate(payload)
+
+    assert "status=onboarding requires clarification_question=null" in str(exc_info.value)
+
+
 def test_report_contracts_valid_payloads() -> None:
     report_filters = ReportFilters.model_validate(_filters_payload())
     report_request = ReportRequest.model_validate(

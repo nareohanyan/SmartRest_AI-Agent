@@ -50,39 +50,55 @@ from app.schemas.reports import ReportRequest
 from app.schemas.tools import AccessStatus, RunReportRequest
 
 _ARMENIAN_CHAR_RE = re.compile(r"[\u0531-\u058F]")
+_CYRILLIC_CHAR_RE = re.compile(r"[\u0400-\u04FF]")
 
 
 def _question_language(question: str) -> str:
     if _ARMENIAN_CHAR_RE.search(question) is not None:
         return "hy"
+    if _CYRILLIC_CHAR_RE.search(question) is not None:
+        return "ru"
     return "en"
 
 
 def _smalltalk_answer(language: str) -> str:
     if language == "hy":
-        return "Ողջույն։ Ուրախ եմ տեսնել ձեզ այստեղ։"
+        return "Ողջու՜յն։ Ինչո՞վ կարող եմ օգնել ձեզ այսօր։"
+    if language == "ru":
+        return "Здравствуйте. Чем я могу вам сегодня помочь?"
     return "Hello. Nice to see you here."
 
 
 def _safe_unsupported_answer(language: str) -> str:
     if language == "hy":
         return (
-            "Ցավոք ես չունեմ բավականաչափ ինֆորմացիա տվյալ հարցին պատասխանելու համար։ Ավելին իմանալու համար կարող եք զանգահարել 060 44 55 66։ "
+            "Ցավոք ես չունեմ բավականաչափ ինֆորմացիա տվյալ հարցին պատասխանելու համար։ "
+            "Ավելին իմանալու համար կարող եք զանգահարել 060 44 55 66։ "
+        )
+    if language == "ru":
+        return (
+            "К сожалению, у меня недостаточно информации, чтобы ответить на этот вопрос. "
+            "Для получения дополнительной информации вы можете позвонить по номеру 060 44 55 66."
         )
     return (
-        "Unfortunately i don't have enough information to answer your question. For further questions you can contact 060 44 55 66."
+        "Unfortunately i don't have enough information to answer your question. "
+        "For further questions you can contact 060 44 55 66."
     )
 
 
 def _access_denied_answer(language: str) -> str:
     if language == "hy":
         return "Մուտքը մերժված է այս հարցման համար։"
+    if language == "ru":
+        return "Доступ по данному запросу запрещен."
     return "Access denied for this request."
 
 
 def _clarification_fallback_question(language: str) -> str:
     if language == "hy":
         return "Խնդրում եմ հստակեցրեք հարցումը:"
+    if language == "ru":
+        return "Пожалуйста, уточните запрос."
     return "Please clarify your request."
 
 

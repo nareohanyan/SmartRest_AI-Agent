@@ -53,7 +53,7 @@ Non-responsibilities:
 Responsibilities:
 - Hold and transition shared agent state.
 - Execute node workflow.
-- Route to run/clarify/reject branches.
+- Route to run/clarify/reject/onboarding branches.
 
 Non-responsibilities:
 - No direct data retrieval bypassing tools.
@@ -97,18 +97,28 @@ Non-responsibilities:
 
 ```text
 resolve_scope
-  -> interpret_request
+  -> plan_analysis
+  -> policy_gate
   -> route_decision
-     -> run_report -> compose_answer
+     -> prepare_legacy_report -> run_report -> calc_metrics -> compose_answer
+     -> run_comparison -> compose_answer
+     -> run_ranking -> compose_answer
+     -> run_trend -> compose_answer
+     -> onboarding
      -> clarify
      -> reject
 ```
 
 Node-by-node behavior:
 - `resolve_scope`: identify user scope and allowed reports.
-- `interpret_request`: extract intent, report_id candidate, and filters.
-- `route_decision`: branch to run, clarify, or reject.
+- `plan_analysis`: extract intent and typed analysis plan.
+- `policy_gate`: enforce allowed routes and execution constraints.
+- `route_decision`: branch to legacy run/comparison/ranking/trend/onboarding/clarify/reject.
 - `run_report`: execute report tool with validated filters.
+- `run_comparison`: execute current vs previous period analysis flow.
+- `run_ranking`: execute bounded ranking analysis flow.
+- `run_trend`: execute timeseries/trend analysis flow.
+- `onboarding`: return neutral conversational response for non-business chat.
 - `clarify`: return missing-information prompt.
 - `reject`: return unsupported-request response and alternatives.
 - `compose_answer`: produce final response from tool outputs and context.
@@ -128,7 +138,7 @@ Required state fields:
 - `tool_outputs`: outputs collected from tool calls.
 - `warnings`: limitations/warnings for response.
 - `final_answer`: response content returned to user.
-- `status`: run status (for example `running`, `completed`, `clarify`, `rejected`, `denied`, `failed`).
+- `status`: run status (for example `running`, `completed`, `onboarding`, `clarify`, `rejected`, `denied`, `failed`).
 
 ## 7) V1 Tools
 
@@ -172,6 +182,8 @@ Not allowed:
 
 - Missing or ambiguous time filter:
   - route to `clarify`.
+- Greeting/casual non-business message:
+  - route to `onboarding` with no clarification required.
 - Unsupported question/report:
   - route to `reject` with supported alternatives.
 - Scope unresolved or forbidden:

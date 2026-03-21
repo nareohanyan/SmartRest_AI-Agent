@@ -31,6 +31,199 @@ from app.schemas.calculations import (
 _DATE_RANGE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})\s*(?:to|-)\s*(\d{4}-\d{2}-\d{2})")
 _ARMENIAN_CHAR_RE = re.compile(r"[\u0531-\u058F]")
 _SMALLTALK_TRAILING_PUNCT_RE = re.compile(r"[!?.…]+$")
+_SMALLTALK_TOKEN_NORMALIZE_RE = re.compile(r"[^\w\s'’]+")
+
+_PURE_SMALLTALK_PHRASES = {
+    "hi",
+    "hello",
+    "hey",
+    "hello there",
+    "good day",
+    "good morning",
+    "good afternoon",
+    "good evening",
+    "how are you",
+    "how you doing",
+    "what you're up to",
+    "what youre up to",
+    "what's up",
+    "whats up",
+    "hello what's up",
+    "hello whats up",
+    "hi what's up",
+    "hi whats up",
+    "hey what's up",
+    "hey whats up",
+    "բարև",
+    "բարեւ",
+    "բարև ձեզ",
+    "բարեւ ձեզ",
+    "barev",
+    "ողջույն",
+    "voghjuyn",
+    "բարի օր",
+    "բարի լույս",
+    "բարի երեկո",
+    "ինչպես ես",
+    "ինչ կա",
+    "ոնց ես",
+    "inchpes es",
+    "привет",
+    "privet",
+    "здравствуйте",
+    "здраствуйте",
+    "zdravstvuyte",
+    "zdrastvuyte",
+    "доброе утро",
+    "добрый день",
+    "добрый вечер",
+    "как дела",
+    "как ты",
+    "что нового",
+    "kak dela",
+}
+
+_GREETING_TOKENS = {
+    "hi",
+    "hello",
+    "hey",
+    "բարև",
+    "բարեւ",
+    "barev",
+    "ողջույն",
+    "voghjuyn",
+    "привет",
+    "privet",
+    "здравствуйте",
+    "здраствуйте",
+    "zdravstvuyte",
+    "zdrastvuyte",
+    "բարի",
+    "good",
+    "добрый",
+    "доброе",
+}
+
+_SMALLTALK_SUPPORT_TOKENS = {
+    "there",
+    "what's",
+    "whats",
+    "up",
+    "how",
+    "are",
+    "you",
+    "doing",
+    "what",
+    "you're",
+    "youre",
+    "to",
+    "good",
+    "morning",
+    "afternoon",
+    "evening",
+    "ինչպես",
+    "ես",
+    "inchpes",
+    "բարի",
+    "լույս",
+    "երեկո",
+    "как",
+    "дела",
+    "доброе",
+    "утро",
+    "добрый",
+    "день",
+    "вечер",
+    "как",
+    "ты",
+    "что",
+    "нового",
+    "ոնց",
+    "կա",
+}
+
+_METRIC_TERMS = {
+    "վաճառք",
+    "շահույթ",
+    "եկամուտ",
+    "միջինում",
+    "հաշվետվություն",
+    "ծախս",
+    "վնաս",
+    "օգուտ",
+    "եկամտաբեր",
+    "շահավետ",
+    "օգտակար",
+    "պատվեր",
+    "продажи",
+    "прибыль",
+    "доход",
+    "средний",
+    "отчет",
+    "расходы",
+    "убыток",
+    "выгода",
+    "прибыльный",
+    "полезный",
+    "заказ",
+    "sales",
+    "profit",
+    "income",
+    "average",
+    "report",
+    "expense",
+    "loss",
+    "benefit",
+    "profitable",
+    "useful",
+    "order",
+    "earnings",
+}
+
+_HIGH_PRIORITY_BUSINESS_TERMS = {
+    "հաշվետվություն",
+    "վաճառք",
+    "օգուտ",
+    "շահույթ",
+    "отчет",
+    "продажи",
+    "прибыль",
+    "доход",
+    "report",
+    "sales",
+    "profit",
+    "earnings",
+}
+
+_OPERATION_TERMS = {
+    "համեմաել",
+    "աճ",
+    "նվազել",
+    "հաշվարկել",
+    "сравнивать",
+    "увеличивать",
+    "уменьшать",
+    "вычислять",
+    "compare",
+    "increase",
+    "decrease",
+    "calculate",
+}
+
+_DIMENSION_TERMS = {
+    "մասնաճյուղ",
+    "ֆիլիալ",
+    "հասցե",
+    "բաժին",
+    "филиал",
+    "дочерняя компания",
+    "адрес",
+    "отдел",
+    "branch",
+    "subsidiary",
+    "address",
+    "department",
+}
 
 
 class PlanningError(ValueError):
@@ -41,31 +234,68 @@ def _is_armenian_text(text: str) -> bool:
     return _ARMENIAN_CHAR_RE.search(text) is not None
 
 
-def _is_smalltalk(question: str) -> bool:
+def _normalize_smalltalk_text(question: str) -> str:
     normalized = question.lower().strip()
+    normalized = normalized.replace("’", "'")
+    normalized = _SMALLTALK_TRAILING_PUNCT_RE.sub("", normalized)
+    normalized = _SMALLTALK_TOKEN_NORMALIZE_RE.sub(" ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def _count_term_hits(normalized_question: str, tokens: set[str], terms: set[str]) -> int:
+    hits = 0
+    for term in terms:
+        if " " in term:
+            if term in normalized_question:
+                hits += 1
+            continue
+        if term in tokens:
+            hits += 1
+    return hits
+
+
+def _contains_business_signal(normalized_question: str) -> bool:
+    tokens = set(normalized_question.split())
+    high_priority_hits = _count_term_hits(
+        normalized_question,
+        tokens,
+        _HIGH_PRIORITY_BUSINESS_TERMS,
+    )
+    if high_priority_hits > 0:
+        return True
+
+    metric_hits = _count_term_hits(normalized_question, tokens, _METRIC_TERMS)
+    operation_hits = _count_term_hits(normalized_question, tokens, _OPERATION_TERMS)
+    dimension_hits = _count_term_hits(normalized_question, tokens, _DIMENSION_TERMS)
+
+    if metric_hits > 0:
+        return True
+    if operation_hits > 0 and dimension_hits > 0:
+        return True
+    return False
+
+
+def _is_smalltalk(question: str) -> bool:
+    normalized = _normalize_smalltalk_text(question)
     if not normalized:
         return False
 
-    normalized = _SMALLTALK_TRAILING_PUNCT_RE.sub("", normalized)
-    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if _contains_business_signal(normalized):
+        return False
 
-    pure_smalltalk_phrases = {
-        "hi",
-        "hello",
-        "hey",
-        "hello there",
-        "good morning",
-        "good afternoon",
-        "good evening",
-        "how are you",
-        "բարև",
-        "բարեւ",
-        "ողջույն",
-        "բարի լույս",
-        "բարի երեկո",
-        "ինչպես ես",
-    }
-    return normalized in pure_smalltalk_phrases
+    if normalized in _PURE_SMALLTALK_PHRASES:
+        return True
+
+    tokens = normalized.split()
+    if not tokens or len(tokens) > 7:
+        return False
+
+    if not any(token in _GREETING_TOKENS for token in tokens):
+        return False
+
+    allowed_tokens = _GREETING_TOKENS | _SMALLTALK_SUPPORT_TOKENS
+    return all(token in allowed_tokens for token in tokens)
 
 
 def _parse_date_range(question: str) -> tuple[date, date] | None:

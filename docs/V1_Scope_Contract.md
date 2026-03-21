@@ -8,6 +8,7 @@ Status: approved baseline for V1 implementation
 - Intent types:
   - `get_kpi`
   - `breakdown_kpi`
+  - `smalltalk`
   - `needs_clarification`
   - `unsupported_request`
 - Supported report IDs:
@@ -20,7 +21,10 @@ Status: approved baseline for V1 implementation
 - Source/channel filter is optional.
   - Only valid for source-aware reports (for example `sales_by_source` and source-filtered KPI requests).
 - Agent flow:
-  - `resolve_scope -> interpret_request -> route_decision -> run_report | clarify | reject -> compose_answer`
+  - `resolve_scope -> plan_analysis -> policy_gate -> route_decision`
+  - `prepare_legacy_report -> run_report -> calc_metrics -> compose_answer`
+  - `run_comparison|run_ranking|run_trend -> compose_answer`
+  - `onboarding|clarify|reject` as terminal branches
 - Data policy:
   - Business numbers must come from tools only.
   - The LLM must not calculate KPIs directly.
@@ -40,6 +44,10 @@ Status: approved baseline for V1 implementation
 - Any write operation.
 
 ## Behavior Rules (V1)
+- Greeting/casual non-business request -> onboarding response.
+  - status: `onboarding`
+  - needs_clarification: `false`
+  - clarification_question: `null`
 - Missing or ambiguous time filter -> ask clarification, do not guess.
 - Unsupported request -> explicit rejection with supported alternatives.
 - Scope unresolved or forbidden -> safe deny response.

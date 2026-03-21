@@ -132,6 +132,7 @@ def test_runtime_merges_persistence_warnings_into_response() -> None:
     "terminal_status",
     [
         RunStatus.COMPLETED,
+        RunStatus.ONBOARDING,
         RunStatus.CLARIFY,
         RunStatus.REJECTED,
         RunStatus.DENIED,

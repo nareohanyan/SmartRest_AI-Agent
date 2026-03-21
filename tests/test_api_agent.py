@@ -90,6 +90,67 @@ async def test_missing_date_returns_clarify_response(api_client: AsyncClient) ->
     assert "date range" in payload["clarification_question"].lower()
 
 
+async def test_smalltalk_returns_onboarding_contract(api_client: AsyncClient) -> None:
+    response = await api_client.post("/agent/run", json=_request_payload("բարև"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "onboarding"
+    assert payload["needs_clarification"] is False
+    assert payload["clarification_question"] is None
+    assert payload["answer"] == "Ողջու՜յն։ Ինչո՞վ կարող եմ օգնել ձեզ այսօր։"
+
+
+async def test_smalltalk_in_russian_returns_onboarding_contract(api_client: AsyncClient) -> None:
+    response = await api_client.post("/agent/run", json=_request_payload("здравствуйте"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "onboarding"
+    assert payload["needs_clarification"] is False
+    assert payload["clarification_question"] is None
+    assert payload["answer"] == "Здравствуйте. Чем я могу вам сегодня помочь?"
+
+
+async def test_casual_english_smalltalk_returns_onboarding_contract(
+    api_client: AsyncClient,
+) -> None:
+    response = await api_client.post("/agent/run", json=_request_payload("hello what's up"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "onboarding"
+    assert payload["needs_clarification"] is False
+    assert payload["clarification_question"] is None
+    assert payload["answer"] == "Hello. Nice to see you here."
+
+
+async def test_casual_armenian_smalltalk_returns_onboarding_contract(
+    api_client: AsyncClient,
+) -> None:
+    response = await api_client.post("/agent/run", json=_request_payload("ինչ կա"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "onboarding"
+    assert payload["needs_clarification"] is False
+    assert payload["clarification_question"] is None
+    assert payload["answer"] == "Ողջու՜յն։ Ինչո՞վ կարող եմ օգնել ձեզ այսօր։"
+
+
+async def test_typo_russian_greeting_returns_onboarding_contract(
+    api_client: AsyncClient,
+) -> None:
+    response = await api_client.post("/agent/run", json=_request_payload("здраствуйте"))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "onboarding"
+    assert payload["needs_clarification"] is False
+    assert payload["clarification_question"] is None
+    assert payload["answer"] == "Здравствуйте. Чем я могу вам сегодня помочь?"
+
+
 async def test_unsupported_request_returns_rejected_status(api_client: AsyncClient) -> None:
     response = await api_client.post(
         "/agent/run",

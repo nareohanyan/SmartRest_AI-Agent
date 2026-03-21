@@ -157,13 +157,131 @@ def test_smalltalk_in_armenian_routes_to_smalltalk_answer() -> None:
     ]
     assert final_state.status is RunStatus.ONBOARDING
     assert final_state.needs_clarification is False
-    assert final_state.final_answer == "Ողջույն։ Ուրախ եմ տեսնել ձեզ այստեղ։"
+    assert final_state.final_answer == "Ողջու՜յն։ Ինչո՞վ կարող եմ օգնել ձեզ այսօր։"
+    assert final_state.clarification_question is None
+
+
+def test_smalltalk_in_russian_routes_to_smalltalk_answer() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state("привет")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "plan_analysis",
+        "policy_gate",
+        "route_decision",
+        "smalltalk",
+    ]
+    assert final_state.status is RunStatus.ONBOARDING
+    assert final_state.needs_clarification is False
+    assert final_state.final_answer == "Здравствуйте. Чем я могу вам сегодня помочь?"
+    assert final_state.clarification_question is None
+
+
+def test_casual_smalltalk_in_english_routes_to_smalltalk_answer() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state("hello what's up")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "plan_analysis",
+        "policy_gate",
+        "route_decision",
+        "smalltalk",
+    ]
+    assert final_state.status is RunStatus.ONBOARDING
+    assert final_state.needs_clarification is False
+    assert final_state.final_answer == "Hello. Nice to see you here."
+    assert final_state.clarification_question is None
+
+
+def test_casual_smalltalk_in_armenian_routes_to_smalltalk_answer() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state("ինչ կա")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "plan_analysis",
+        "policy_gate",
+        "route_decision",
+        "smalltalk",
+    ]
+    assert final_state.status is RunStatus.ONBOARDING
+    assert final_state.needs_clarification is False
+    assert final_state.final_answer == "Ողջու՜յն։ Ինչո՞վ կարող եմ օգնել ձեզ այսօր։"
+    assert final_state.clarification_question is None
+
+
+def test_typo_russian_greeting_routes_to_smalltalk_answer() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state("здраствуйте")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "plan_analysis",
+        "policy_gate",
+        "route_decision",
+        "smalltalk",
+    ]
+    assert final_state.status is RunStatus.ONBOARDING
+    assert final_state.needs_clarification is False
+    assert final_state.final_answer == "Здравствуйте. Чем я могу вам сегодня помочь?"
     assert final_state.clarification_question is None
 
 
 def test_mixed_greeting_with_business_text_is_not_smalltalk() -> None:
     graph = build_agent_graph()
     payload = _initial_state("բարև ինձ տուր էս ամսվա ամենաեկամտաբեր ապրանքը")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "plan_analysis",
+        "policy_gate",
+        "route_decision",
+        "safe_answer",
+    ]
+    assert final_state.status is RunStatus.REJECTED
+    assert final_state.policy_route is not None
+    assert final_state.policy_route.value == "safe_answer"
+
+
+def test_greeting_with_business_terms_is_not_smalltalk() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state("hello compare branch")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "plan_analysis",
+        "policy_gate",
+        "route_decision",
+        "safe_answer",
+    ]
+    assert final_state.status is RunStatus.REJECTED
+    assert final_state.policy_route is not None
+    assert final_state.policy_route.value == "safe_answer"
+
+
+def test_high_priority_business_trigger_blocks_smalltalk() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state("hello earnings")
 
     final_state = AgentState.model_validate(graph.invoke(payload))
     order = _node_order(graph, payload)
@@ -307,7 +425,7 @@ def test_smalltalk_bypasses_llm_even_in_llm_mode(
     assert "response_llm_fallback" not in final_state.warnings
 
 
-def test_smalltalk_uses_llm_response_generation_when_available(
+def test_smalltalk_stays_deterministic_even_when_llm_is_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_client = _FakeLLMClient(output_text="Բարև, ինչպե՞ս կարող եմ օգնել SmartRest տվյալներով։")
@@ -324,5 +442,5 @@ def test_smalltalk_uses_llm_response_generation_when_available(
     assert len(fake_client.calls) == 0
     assert final_state.status is RunStatus.ONBOARDING
     assert final_state.needs_clarification is False
-    assert final_state.final_answer == "Ողջույն։ Ուրախ եմ տեսնել ձեզ այստեղ։"
+    assert final_state.final_answer == "Ողջու՜յն։ Ինչո՞վ կարող եմ օգնել ձեզ այսօր։"
     assert final_state.clarification_question is None

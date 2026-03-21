@@ -18,7 +18,8 @@ Milestone 1 is complete only if all `mandatory` gates pass.
 ### M1-F1 Functional Flow
 Requirement:
 - Agent executes this workflow end-to-end for supported requests:
-  - `resolve_scope -> interpret_request -> route_decision -> run_report -> compose_answer`
+  - `resolve_scope -> plan_analysis -> policy_gate -> route_decision`
+  - `prepare_legacy_report -> run_report -> calc_metrics -> compose_answer`
 Pass condition:
 - Integration test confirms all required nodes execute in order.
 
@@ -33,6 +34,13 @@ Requirement:
 - Unsupported requests are rejected cleanly with supported alternatives.
 Pass condition:
 - Test case for unsupported request returns reject status and no report execution.
+
+### M1-F5 Onboarding Flow
+Requirement:
+- Greeting/casual non-business requests route to onboarding response.
+Pass condition:
+- Test case for smalltalk returns `status=onboarding`, with
+  `needs_clarification=false` and `clarification_question=null`.
 
 ### M1-F4 Scope Enforcement
 Requirement:
@@ -96,6 +104,7 @@ Pass condition:
 - `T6_output_contract_fields_present`
 - `T7_persistence_records_run_and_state`
 - `T8_quality_gate_commands_pass`
+- `T9_smalltalk_returns_onboarding_contract`
 
 ## 5) Completion Rule
 Milestone 1 can be marked done only when:
