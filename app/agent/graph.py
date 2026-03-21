@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
+from decimal import Decimal
 from typing import Any
 
 from langgraph.graph import END, StateGraph
@@ -169,22 +170,22 @@ _TOP_N_DISPLAY_REPORT_IDS = {
 
 _LOCALIZED_REPORT_NAMES: dict[str, dict[str, str]] = {
     "en": {
-        "sales_total": "sales_total",
-        "order_count": "order_count",
-        "average_check": "average_check",
-        "sales_by_source": "sales_by_source",
-        "sales_by_courier": "sales_by_courier",
-        "top_locations": "top_locations",
-        "top_customers": "top_customers",
-        "repeat_customer_rate": "repeat_customer_rate",
-        "delivery_fee_analytics": "delivery_fee_analytics",
-        "payment_collection": "payment_collection",
-        "outstanding_balance": "outstanding_balance",
-        "daily_sales_trend": "daily_sales_trend",
-        "daily_order_trend": "daily_order_trend",
-        "sales_by_weekday": "sales_by_weekday",
-        "gross_profit": "gross_profit",
-        "location_concentration": "location_concentration",
+        "sales_total": "total sales",
+        "order_count": "order count",
+        "average_check": "average check",
+        "sales_by_source": "sales by source",
+        "sales_by_courier": "sales by courier",
+        "top_locations": "top locations",
+        "top_customers": "top customers",
+        "repeat_customer_rate": "repeat customer rate",
+        "delivery_fee_analytics": "delivery fee analytics",
+        "payment_collection": "payment collection",
+        "outstanding_balance": "outstanding balance",
+        "daily_sales_trend": "daily sales trend",
+        "daily_order_trend": "daily order trend",
+        "sales_by_weekday": "sales by weekday",
+        "gross_profit": "gross profit",
+        "location_concentration": "location concentration",
     },
     "hy": {
         "sales_total": "ընդհանուր վաճառք",
@@ -226,46 +227,64 @@ _LOCALIZED_REPORT_NAMES: dict[str, dict[str, str]] = {
 
 _LOCALIZED_METRIC_LABELS: dict[str, dict[str, str]] = {
     "en": {
-        "sales_total": "sales_total",
-        "order_count": "order_count",
-        "average_check": "average_check",
-        "sales_total_per_day": "sales_total_per_day",
-        "delivery_fee_total": "delivery_fee_total",
-        "delivery_fee_average": "delivery_fee_average",
-        "collection_rate_percent": "collection_rate_percent",
-        "outstanding_balance": "outstanding_balance",
-        "gross_profit": "gross_profit",
-        "gross_margin_percent": "gross_margin_percent",
-        "repeat_customer_rate_percent": "repeat_customer_rate_percent",
-        "repeat_customer_count": "repeat_customer_count",
+        "sales_total": "total sales",
+        "order_count": "order count",
+        "average_check": "average check",
+        "sales_total_per_day": "average daily sales",
+        "order_count_per_day": "average daily order count",
+        "delivery_fee_total": "total delivery fee",
+        "delivery_fee_average": "average delivery fee",
+        "collection_rate_percent": "collection rate",
+        "invoiced_total": "invoiced total",
+        "paid_total": "paid total",
+        "outstanding_balance": "outstanding balance",
+        "gross_profit": "gross profit",
+        "gross_margin_percent": "gross margin",
+        "repeat_customer_rate_percent": "repeat customer rate",
+        "repeat_customer_count": "repeat customer count",
+        "top_10_location_share_percent": "top 10 location share",
+        "top_1_location_share_percent": "top location share",
+        "distinct_locations_count": "distinct locations",
     },
     "hy": {
         "sales_total": "ընդհանուր վաճառք",
         "order_count": "պատվերների քանակ",
         "average_check": "միջին չեկ",
         "sales_total_per_day": "օրական միջին վաճառք",
+        "order_count_per_day": "օրական միջին պատվերների քանակ",
         "delivery_fee_total": "առաքման վճար (ընդհանուր)",
         "delivery_fee_average": "առաքման միջին վճար",
         "collection_rate_percent": "հավաքագրման տոկոս",
+        "invoiced_total": "դուրս գրված գումար",
+        "paid_total": "վճարված գումար",
         "outstanding_balance": "չմարված մնացորդ",
         "gross_profit": "համախառն շահույթ",
-        "gross_margin_percent": "համախառն մարժա (%)",
+        "gross_margin_percent": "համախառն մարժա",
         "repeat_customer_rate_percent": "կրկնվող հաճախորդների տոկոս",
         "repeat_customer_count": "կրկնվող հաճախորդների քանակ",
+        "top_10_location_share_percent": "թոփ 10 հասցեների մասնաբաժին",
+        "top_1_location_share_percent": "ամենաակտիվ հասցեի մասնաբաժին",
+        "distinct_locations_count": "եզակի հասցեների քանակ",
     },
     "ru": {
         "sales_total": "общие продажи",
         "order_count": "количество заказов",
         "average_check": "средний чек",
         "sales_total_per_day": "продажи в день",
+        "order_count_per_day": "заказы в день",
         "delivery_fee_total": "стоимость доставки (итого)",
         "delivery_fee_average": "средняя стоимость доставки",
         "collection_rate_percent": "процент собираемости",
+        "invoiced_total": "сумма выставлений",
+        "paid_total": "оплаченная сумма",
         "outstanding_balance": "задолженность",
         "gross_profit": "валовая прибыль",
-        "gross_margin_percent": "валовая маржа (%)",
+        "gross_margin_percent": "валовая маржа",
         "repeat_customer_rate_percent": "доля повторных клиентов",
         "repeat_customer_count": "число повторных клиентов",
+        "top_10_location_share_percent": "доля топ 10 локаций",
+        "top_1_location_share_percent": "доля топ локации",
+        "distinct_locations_count": "число уникальных локаций",
     },
 }
 
@@ -287,6 +306,36 @@ _LOCALIZED_FILTER_LABELS: dict[str, dict[ReportFilterKey, str]] = {
         ReportFilterKey.COURIER: "курьера",
         ReportFilterKey.LOCATION: "локацию",
         ReportFilterKey.PHONE_NUMBER: "номер телефона",
+    },
+}
+
+_LOCALIZED_WEEKDAY_LABELS: dict[str, dict[str, str]] = {
+    "en": {
+        "monday": "Monday",
+        "tuesday": "Tuesday",
+        "wednesday": "Wednesday",
+        "thursday": "Thursday",
+        "friday": "Friday",
+        "saturday": "Saturday",
+        "sunday": "Sunday",
+    },
+    "hy": {
+        "monday": "Երկուշաբթի",
+        "tuesday": "Երեքշաբթի",
+        "wednesday": "Չորեքշաբթի",
+        "thursday": "Հինգշաբթի",
+        "friday": "Ուրբաթ",
+        "saturday": "Շաբաթ",
+        "sunday": "Կիրակի",
+    },
+    "ru": {
+        "monday": "понедельник",
+        "tuesday": "вторник",
+        "wednesday": "среда",
+        "thursday": "четверг",
+        "friday": "пятница",
+        "saturday": "суббота",
+        "sunday": "воскресенье",
     },
 }
 
@@ -314,7 +363,10 @@ def _localized_clarification_question(state: AgentState) -> str:
 
 def _localized_report_name(state: AgentState, report_id: ReportType) -> str:
     language = _response_language(state.user_question)
-    return _LOCALIZED_REPORT_NAMES[language].get(report_id.value, report_id.value)
+    return _LOCALIZED_REPORT_NAMES[language].get(
+        report_id.value,
+        _humanize_identifier(report_id.value),
+    )
 
 
 def _localized_filter_label(state: AgentState, filter_key: ReportFilterKey) -> str:
@@ -357,27 +409,162 @@ def _strip_incompatible_filters(
     return filters.model_copy(update=filter_updates)
 
 
-def _format_applied_filters(state: AgentState, filters: ReportFilters) -> str:
-    parts = [
-        f"{_localized_filter_label(state, filter_key)}={getattr(filters, field_name)}"
-        for filter_key, field_name in _FILTER_FIELD_BY_KEY.items()
-        if getattr(filters, field_name) is not None
-    ]
-    if not parts:
-        return ""
+def _humanize_identifier(value: str) -> str:
+    return " ".join(value.strip().replace("_", " ").split())
+
+
+def _display_dimension_value(state: AgentState, value: str) -> str:
+    normalized_value = value.strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized_value):
+        return normalized_value
 
     language = _response_language(state.user_question)
-    joined = ", ".join(parts)
-    if language == "hy":
-        return f" Ֆիլտրեր՝ {joined}։"
-    if language == "ru":
-        return f" Фильтры: {joined}."
-    return f" Filters: {joined}."
+    weekday_key = normalized_value.lower().replace(" ", "_")
+    if weekday_key in _LOCALIZED_WEEKDAY_LABELS[language]:
+        return _LOCALIZED_WEEKDAY_LABELS[language][weekday_key]
+
+    humanized = _humanize_identifier(normalized_value)
+    if humanized.lower() == humanized and any(ch.isalpha() for ch in humanized):
+        return humanized.title()
+    return humanized
+
+
+def _join_human_list(state: AgentState, items: list[str]) -> str:
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+
+    language = _response_language(state.user_question)
+    conjunction = {"en": "and", "hy": "և", "ru": "и"}[language]
+    if len(items) == 2:
+        return f"{items[0]} {conjunction} {items[1]}"
+    return f"{', '.join(items[:-1])}, {conjunction} {items[-1]}"
+
+
+def _capitalize_first(text: str) -> str:
+    stripped = text.lstrip()
+    if not stripped:
+        return text
+    prefix_length = len(text) - len(stripped)
+    return f"{text[:prefix_length]}{stripped[0].upper()}{stripped[1:]}"
+
+
+def _compact_join(items: list[str]) -> str:
+    return ", ".join(item for item in items if item)
+
+
+def _is_percentage_metric(metric_key: str) -> bool:
+    return "percent" in metric_key
+
+
+def _format_numeric_value(value: Any, *, as_percentage: bool = False) -> str:
+    numeric = Decimal(str(value))
+    if numeric == numeric.to_integral():
+        formatted = f"{numeric:,.0f}"
+    else:
+        formatted = f"{numeric:,.2f}"
+    if as_percentage:
+        return f"{formatted}%"
+    return formatted
 
 
 def _localized_metric_label(state: AgentState, label: str) -> str:
     language = _response_language(state.user_question)
-    return _LOCALIZED_METRIC_LABELS[language].get(label, label)
+    localized = _LOCALIZED_METRIC_LABELS[language].get(label)
+    if localized is not None:
+        return localized
+
+    if label.startswith("share_percent_"):
+        entity = _display_dimension_value(state, label.removeprefix("share_percent_"))
+        if language == "hy":
+            return f"{entity} մասնաբաժին"
+        if language == "ru":
+            return f"доля {entity}"
+        return f"{entity} share"
+
+    if label.endswith("_per_day"):
+        base = _localized_metric_label(state, label.removesuffix("_per_day"))
+        if language == "hy":
+            return f"{base} օրական"
+        if language == "ru":
+            return f"{base} в день"
+        return f"{base} per day"
+
+    if label.endswith("_delta"):
+        base = _localized_metric_label(state, label.removesuffix("_delta"))
+        if language == "hy":
+            return f"{base} փոփոխություն"
+        if language == "ru":
+            return f"изменение {base}"
+        return f"change in {base}"
+
+    if label.endswith("_percent_change"):
+        base = _localized_metric_label(state, label.removesuffix("_percent_change"))
+        if language == "hy":
+            return f"{base} տոկոսային փոփոխություն"
+        if language == "ru":
+            return f"процентное изменение {base}"
+        return f"percentage change in {base}"
+
+    return _humanize_identifier(label)
+
+
+def _active_dimension_filters(
+    state: AgentState,
+    filters: ReportFilters | None,
+) -> list[tuple[ReportFilterKey, str]]:
+    if filters is None:
+        return []
+
+    active: list[tuple[ReportFilterKey, str]] = []
+    for filter_key, field_name in _FILTER_FIELD_BY_KEY.items():
+        raw_value = getattr(filters, field_name)
+        if raw_value is None:
+            continue
+        active.append((filter_key, _display_dimension_value(state, str(raw_value))))
+    return active
+
+
+def _filter_context_phrase(state: AgentState, filters: ReportFilters | None) -> str | None:
+    active_filters = _active_dimension_filters(state, filters)
+    if not active_filters:
+        return None
+
+    language = _response_language(state.user_question)
+    if len(active_filters) > 1:
+        if language == "hy":
+            return "այդ հատվածում"
+        if language == "ru":
+            return "в этом срезе"
+        return "in that segment"
+
+    filter_key, display_value = active_filters[0]
+    if language == "hy":
+        if filter_key is ReportFilterKey.SOURCE:
+            return f"{display_value} աղբյուրով"
+        if filter_key is ReportFilterKey.COURIER:
+            return f"{display_value}-ի դեպքում"
+        if filter_key is ReportFilterKey.LOCATION:
+            return f"{display_value} հասցեում"
+        return f"{display_value} համարով"
+
+    if language == "ru":
+        if filter_key is ReportFilterKey.SOURCE:
+            return f"по источнику {display_value}"
+        if filter_key is ReportFilterKey.COURIER:
+            return f"по курьеру {display_value}"
+        if filter_key is ReportFilterKey.LOCATION:
+            return f"по адресу {display_value}"
+        return f"по номеру {display_value}"
+
+    if filter_key is ReportFilterKey.SOURCE:
+        return f"for {display_value}"
+    if filter_key is ReportFilterKey.COURIER:
+        return f"for {display_value}"
+    if filter_key is ReportFilterKey.LOCATION:
+        return f"at {display_value}"
+    return f"for phone number {display_value}"
 
 
 def _build_filter_clarification_question(
@@ -1873,6 +2060,139 @@ def _metrics_for_display(
     return metrics[:requested_top_n] or metrics
 
 
+def _metric_value_fragment(
+    state: AgentState,
+    metric_key: str,
+    value: Any,
+    *,
+    capitalize: bool = False,
+) -> str:
+    label = _localized_metric_label(state, metric_key)
+    formatted_value = _format_numeric_value(value, as_percentage=_is_percentage_metric(metric_key))
+    language = _response_language(state.user_question)
+    separator = "՝" if language == "hy" else ":"
+    fragment = f"{label}{separator} {formatted_value}"
+    if capitalize:
+        return _capitalize_first(fragment)
+    return fragment
+
+
+def _metric_not_available_fragment(state: AgentState, metric_key: str) -> str:
+    label = _localized_metric_label(state, metric_key)
+    language = _response_language(state.user_question)
+    if language == "hy":
+        return f"{label} հասանելի չէ"
+    if language == "ru":
+        return f"{label} недоступно"
+    return f"{label} was not available"
+
+
+def _breakdown_metric_fragment(
+    state: AgentState,
+    *,
+    report_id: ReportType,
+    label: str,
+    value: Any,
+) -> str:
+    display_label = _display_dimension_value(state, label)
+    display_value = _format_numeric_value(value)
+    separator = "՝" if _response_language(state.user_question) == "hy" else ":"
+    return f"{display_label}{separator} {display_value}"
+
+
+def _compose_report_body(
+    state: AgentState,
+    *,
+    report_id: ReportType,
+    metrics: list[Any],
+) -> str:
+    if report_id in _BREAKDOWN_REPORT_IDS:
+        details = _compact_join(
+            [
+                _breakdown_metric_fragment(
+                    state,
+                    report_id=report_id,
+                    label=metric.label,
+                    value=metric.value,
+                )
+                for metric in metrics
+            ],
+        )
+        report_name = _localized_report_name(state, report_id)
+        separator = "՝" if _response_language(state.user_question) == "hy" else ":"
+        return f"{_capitalize_first(report_name)}{separator} {details}"
+
+    return _compact_join(
+        [
+            _metric_value_fragment(
+                state,
+                metric.label,
+                metric.value,
+                capitalize=index == 0,
+            )
+            for index, metric in enumerate(metrics)
+        ]
+    )
+
+
+def _wrap_period_summary(state: AgentState, filters: ReportFilters, body: str) -> str:
+    context_phrase = _filter_context_phrase(state, filters)
+    language = _response_language(state.user_question)
+    if language == "en":
+        period = f" ({filters.date_from} to {filters.date_to})"
+    else:
+        period = f" ({filters.date_from} - {filters.date_to})"
+
+    if context_phrase:
+        if language == "hy":
+            return f"{context_phrase}, {body}{period}։"
+        if language == "ru":
+            return f"{context_phrase}, {body}{period}."
+        return f"{_capitalize_first(context_phrase)}, {body}{period}."
+
+    if language == "hy":
+        return f"{body}{period}։"
+    return f"{body}{period}."
+
+
+def _format_derived_metrics(state: AgentState) -> str:
+    if not state.derived_metrics:
+        return ""
+
+    language = _response_language(state.user_question)
+    parts = [
+        (
+            (
+                f"Օրական միջինը՝ {_format_numeric_value(metric.value)}"
+                if language == "hy" and metric.key == "sales_total_per_day"
+                else f"В среднем в день {_format_numeric_value(metric.value)}"
+                if language == "ru" and metric.key == "sales_total_per_day"
+                else f"Per day: {_format_numeric_value(metric.value)}"
+                if language == "en" and metric.key == "sales_total_per_day"
+                else f"Օրական միջինը՝ {_format_numeric_value(metric.value)} պատվեր"
+                if language == "hy" and metric.key == "order_count_per_day"
+                else f"В среднем в день {_format_numeric_value(metric.value)} заказов"
+                if language == "ru" and metric.key == "order_count_per_day"
+                else f"Per day: {_format_numeric_value(metric.value)} orders"
+                if language == "en" and metric.key == "order_count_per_day"
+                else _metric_value_fragment(
+                    state,
+                    metric.key,
+                    metric.value,
+                    capitalize=False,
+                )
+            )
+            if metric.value is not None
+            else _metric_not_available_fragment(state, metric.key)
+        )
+        for metric in state.derived_metrics
+    ]
+    joined = _compact_join(parts)
+    if language == "hy":
+        return f"{joined}։"
+    return f"{joined}."
+
+
 def _compose_single_report_summary(
     state: AgentState,
     *,
@@ -1882,35 +2202,20 @@ def _compose_single_report_summary(
     include_derived: bool,
 ) -> str:
     display_metrics = _metrics_for_display(report_id, metrics, state.requested_top_n)
-    metrics_text = ", ".join(
-        f"{_localized_metric_label(state, metric.label)}={metric.value:.2f}"
-        for metric in display_metrics
-    )
-    final_answer = _localized_message(
-        state,
-        "report_summary",
-        report=_localized_report_name(state, report_id),
-        date_from=filters.date_from,
-        date_to=filters.date_to,
-        metrics=metrics_text,
-    )
-    final_answer = f"{final_answer}{_format_applied_filters(state, filters)}"
-
-    if not include_derived:
-        return final_answer
-
-    not_available = _localized_message(state, "not_available")
-    derived_text = ", ".join(
-        (
-            f"{_localized_metric_label(state, metric.key)}={metric.value:.2f}"
-            if metric.value is not None
-            else f"{_localized_metric_label(state, metric.key)}={not_available}"
+    sentences = [
+        _wrap_period_summary(
+            state,
+            filters,
+            _compose_report_body(state, report_id=report_id, metrics=display_metrics),
         )
-        for metric in state.derived_metrics
-    )
-    if not derived_text:
-        return final_answer
-    return f"{final_answer}{_localized_message(state, 'derived_prefix', derived=derived_text)}"
+    ]
+
+    if include_derived:
+        derived_sentence = _format_derived_metrics(state)
+        if derived_sentence:
+            sentences.append(derived_sentence)
+
+    return " ".join(sentences)
 
 
 def _compose_output_node(state: AgentState) -> dict[str, Any]:
@@ -1943,11 +2248,7 @@ def _compose_output_node(state: AgentState) -> dict[str, Any]:
                     include_derived=False,
                 )
             )
-        numbered_blocks = "\n".join(
-            f"{index}. {block}"
-            for index, block in enumerate(blocks, start=1)
-        )
-        final_answer = numbered_blocks
+        final_answer = "\n\n".join(blocks)
 
     return {
         "status": RunStatus.COMPLETED,

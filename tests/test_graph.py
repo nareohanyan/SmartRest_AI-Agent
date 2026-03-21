@@ -109,8 +109,10 @@ def test_supported_request_executes_full_run_path() -> None:
     assert final_state.base_metrics["sales_total"] == sales_total_value
     assert len(final_state.derived_metrics) == 1
     assert final_state.derived_metrics[0].key == "sales_total_per_day"
-    assert "sales_total=" in (final_state.final_answer or "")
-    assert "sales_total_per_day=" in (final_state.final_answer or "")
+    assert final_state.final_answer is not None
+    assert "total sales" in final_state.final_answer.lower()
+    assert "per day" in final_state.final_answer.lower()
+    assert "=" not in final_state.final_answer
 
 
 def test_small_talk_routes_without_report_execution() -> None:
@@ -181,9 +183,11 @@ def test_multi_intent_request_returns_structured_multi_block_answer(
         assert final_state.status is RunStatus.COMPLETED
         assert len(final_state.additional_run_reports) == 1
         assert final_state.final_answer is not None
-        assert final_state.final_answer.startswith("1. ")
-        assert "\n2. " in final_state.final_answer
-        assert "Multi-report response:" not in final_state.final_answer
+        assert "top locations" in final_state.final_answer.lower()
+        assert "total sales" in final_state.final_answer.lower()
+        assert "\n\n" in final_state.final_answer
+        assert "1. " not in final_state.final_answer
+        assert "=" not in final_state.final_answer
     finally:
         get_settings.cache_clear()
 
@@ -204,7 +208,10 @@ def test_top_n_slot_limits_display_for_ranked_reports(
         assert final_state.selected_report_id is ReportType.TOP_LOCATIONS
         assert final_state.requested_top_n == 2
         assert final_state.final_answer is not None
-        assert final_state.final_answer.count("=") == 2
+        assert "=" not in final_state.final_answer
+        assert "kasakh andraniki 29" in final_state.final_answer.lower()
+        assert "bagratunyats 18" in final_state.final_answer.lower()
+        assert "droi 6 48" not in final_state.final_answer.lower()
     finally:
         get_settings.cache_clear()
 
@@ -254,8 +261,8 @@ def test_completed_answer_is_localized_for_armenian_question(
 
     assert final_state.status is RunStatus.COMPLETED
     assert final_state.final_answer is not None
-    assert "Հաշվետվություն" in final_state.final_answer
-    assert "ընդհանուր վաճառք=" in final_state.final_answer
+    assert "ընդհանուր վաճառք" in final_state.final_answer.lower()
+    assert "=" not in final_state.final_answer
 
 
 def test_rejected_answer_is_localized_for_russian_question() -> None:
@@ -380,7 +387,9 @@ def test_sales_total_query_supports_generic_source_filter(
         assert final_state.filters is not None
         assert final_state.filters.source == "glovo"
         assert final_state.final_answer is not None
-        assert "Filters: source=glovo." in final_state.final_answer
+        assert "glovo" in final_state.final_answer.lower()
+        assert "filter" not in final_state.final_answer.lower()
+        assert "=" not in final_state.final_answer
     finally:
         get_settings.cache_clear()
 
@@ -401,6 +410,9 @@ def test_average_check_query_supports_generic_courier_filter(
         assert final_state.selected_report_id is ReportType.AVERAGE_CHECK
         assert final_state.filters is not None
         assert final_state.filters.courier == "azat"
+        assert final_state.final_answer is not None
+        assert "azat" in final_state.final_answer.lower()
+        assert "filter" not in final_state.final_answer.lower()
     finally:
         get_settings.cache_clear()
 
