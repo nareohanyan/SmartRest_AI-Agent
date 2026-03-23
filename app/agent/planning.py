@@ -1,16 +1,9 @@
-"""Deterministic semantic planner for demo-friendly dynamic analysis.
-
-This planner intentionally uses a narrow, testable rule set. It is not trying to
-be a general LLM substitute; it gives the demo a professional contract that can
-later be replaced by an LLM-backed planner without changing the downstream tool
-interfaces.
-"""
-
 from __future__ import annotations
 
 import re
 from datetime import date, timedelta
 
+from app.agent.planner_lexicon import get_planner_lexicon
 from app.schemas.analysis import (
     AnalysisIntent,
     AnalysisPlan,
@@ -30,200 +23,11 @@ from app.schemas.calculations import (
 
 _DATE_RANGE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})\s*(?:to|-)\s*(\d{4}-\d{2}-\d{2})")
 _ARMENIAN_CHAR_RE = re.compile(r"[\u0531-\u058F]")
+_CYRILLIC_CHAR_RE = re.compile(r"[\u0400-\u04FF]")
 _SMALLTALK_TRAILING_PUNCT_RE = re.compile(r"[!?.…]+$")
 _SMALLTALK_TOKEN_NORMALIZE_RE = re.compile(r"[^\w\s'’]+")
-
-_PURE_SMALLTALK_PHRASES = {
-    "hi",
-    "hello",
-    "hey",
-    "hello there",
-    "good day",
-    "good morning",
-    "good afternoon",
-    "good evening",
-    "how are you",
-    "how you doing",
-    "what you're up to",
-    "what youre up to",
-    "what's up",
-    "whats up",
-    "hello what's up",
-    "hello whats up",
-    "hi what's up",
-    "hi whats up",
-    "hey what's up",
-    "hey whats up",
-    "բարև",
-    "բարեւ",
-    "բարև ձեզ",
-    "բարեւ ձեզ",
-    "barev",
-    "ողջույն",
-    "voghjuyn",
-    "բարի օր",
-    "բարի լույս",
-    "բարի երեկո",
-    "ինչպես ես",
-    "ինչ կա",
-    "ոնց ես",
-    "inchpes es",
-    "привет",
-    "privet",
-    "здравствуйте",
-    "здраствуйте",
-    "zdravstvuyte",
-    "zdrastvuyte",
-    "доброе утро",
-    "добрый день",
-    "добрый вечер",
-    "как дела",
-    "как ты",
-    "что нового",
-    "kak dela",
-}
-
-_GREETING_TOKENS = {
-    "hi",
-    "hello",
-    "hey",
-    "բարև",
-    "բարեւ",
-    "barev",
-    "ողջույն",
-    "voghjuyn",
-    "привет",
-    "privet",
-    "здравствуйте",
-    "здраствуйте",
-    "zdravstvuyte",
-    "zdrastvuyte",
-    "բարի",
-    "good",
-    "добрый",
-    "доброе",
-}
-
-_SMALLTALK_SUPPORT_TOKENS = {
-    "there",
-    "what's",
-    "whats",
-    "up",
-    "how",
-    "are",
-    "you",
-    "doing",
-    "what",
-    "you're",
-    "youre",
-    "to",
-    "good",
-    "morning",
-    "afternoon",
-    "evening",
-    "ինչպես",
-    "ես",
-    "inchpes",
-    "բարի",
-    "լույս",
-    "երեկո",
-    "как",
-    "дела",
-    "доброе",
-    "утро",
-    "добрый",
-    "день",
-    "вечер",
-    "как",
-    "ты",
-    "что",
-    "нового",
-    "ոնց",
-    "կա",
-}
-
-_METRIC_TERMS = {
-    "վաճառք",
-    "շահույթ",
-    "եկամուտ",
-    "միջինում",
-    "հաշվետվություն",
-    "ծախս",
-    "վնաս",
-    "օգուտ",
-    "եկամտաբեր",
-    "շահավետ",
-    "օգտակար",
-    "պատվեր",
-    "продажи",
-    "прибыль",
-    "доход",
-    "средний",
-    "отчет",
-    "расходы",
-    "убыток",
-    "выгода",
-    "прибыльный",
-    "полезный",
-    "заказ",
-    "sales",
-    "profit",
-    "income",
-    "average",
-    "report",
-    "expense",
-    "loss",
-    "benefit",
-    "profitable",
-    "useful",
-    "order",
-    "earnings",
-}
-
-_HIGH_PRIORITY_BUSINESS_TERMS = {
-    "հաշվետվություն",
-    "վաճառք",
-    "օգուտ",
-    "շահույթ",
-    "отчет",
-    "продажи",
-    "прибыль",
-    "доход",
-    "report",
-    "sales",
-    "profit",
-    "earnings",
-}
-
-_OPERATION_TERMS = {
-    "համեմաել",
-    "աճ",
-    "նվազել",
-    "հաշվարկել",
-    "сравнивать",
-    "увеличивать",
-    "уменьшать",
-    "вычислять",
-    "compare",
-    "increase",
-    "decrease",
-    "calculate",
-}
-
-_DIMENSION_TERMS = {
-    "մասնաճյուղ",
-    "ֆիլիալ",
-    "հասցե",
-    "բաժին",
-    "филиал",
-    "дочерняя компания",
-    "адрес",
-    "отдел",
-    "branch",
-    "subsidiary",
-    "address",
-    "department",
-}
+_TEXT_TOKEN_NORMALIZE_RE = re.compile(r"[^\w\s'’-]+")
+_PLANNER_LEXICON = get_planner_lexicon()
 
 
 class PlanningError(ValueError):
@@ -232,6 +36,25 @@ class PlanningError(ValueError):
 
 def _is_armenian_text(text: str) -> bool:
     return _ARMENIAN_CHAR_RE.search(text) is not None
+
+
+def _is_cyrillic_text(text: str) -> bool:
+    return _CYRILLIC_CHAR_RE.search(text) is not None
+
+
+def _question_language(text: str) -> str:
+    if _is_armenian_text(text):
+        return "hy"
+    if _is_cyrillic_text(text):
+        return "ru"
+    return "en"
+
+
+def _normalize_text(question: str) -> str:
+    normalized = question.lower().strip().replace("’", "'")
+    normalized = _TEXT_TOKEN_NORMALIZE_RE.sub(" ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
 
 
 def _normalize_smalltalk_text(question: str) -> str:
@@ -260,14 +83,22 @@ def _contains_business_signal(normalized_question: str) -> bool:
     high_priority_hits = _count_term_hits(
         normalized_question,
         tokens,
-        _HIGH_PRIORITY_BUSINESS_TERMS,
+        _PLANNER_LEXICON.high_priority_business_terms,
     )
     if high_priority_hits > 0:
         return True
 
-    metric_hits = _count_term_hits(normalized_question, tokens, _METRIC_TERMS)
-    operation_hits = _count_term_hits(normalized_question, tokens, _OPERATION_TERMS)
-    dimension_hits = _count_term_hits(normalized_question, tokens, _DIMENSION_TERMS)
+    metric_hits = _count_term_hits(normalized_question, tokens, _PLANNER_LEXICON.metric_terms)
+    operation_hits = _count_term_hits(
+        normalized_question,
+        tokens,
+        _PLANNER_LEXICON.operation_terms,
+    )
+    dimension_hits = _count_term_hits(
+        normalized_question,
+        tokens,
+        _PLANNER_LEXICON.dimension_terms,
+    )
 
     if metric_hits > 0:
         return True
@@ -284,64 +115,118 @@ def _is_smalltalk(question: str) -> bool:
     if _contains_business_signal(normalized):
         return False
 
-    if normalized in _PURE_SMALLTALK_PHRASES:
+    if normalized in _PLANNER_LEXICON.pure_smalltalk_phrases:
         return True
 
     tokens = normalized.split()
     if not tokens or len(tokens) > 7:
         return False
 
-    if not any(token in _GREETING_TOKENS for token in tokens):
+    if not any(token in _PLANNER_LEXICON.greeting_tokens for token in tokens):
         return False
 
-    allowed_tokens = _GREETING_TOKENS | _SMALLTALK_SUPPORT_TOKENS
+    allowed_tokens = (
+        _PLANNER_LEXICON.greeting_tokens
+        | _PLANNER_LEXICON.smalltalk_support_tokens
+    )
     return all(token in allowed_tokens for token in tokens)
 
 
 def _parse_date_range(question: str) -> tuple[date, date] | None:
     match = _DATE_RANGE_RE.search(question)
-    if not match:
+    if match:
+        return (date.fromisoformat(match.group(1)), date.fromisoformat(match.group(2)))
+    return _parse_relative_date_range(question)
+
+
+def _has_any_phrase(text: str, phrases: set[str]) -> bool:
+    return any(phrase in text for phrase in phrases)
+
+
+def _parse_relative_date_range(
+    question: str,
+    *,
+    reference_date: date | None = None,
+) -> tuple[date, date] | None:
+    normalized = _normalize_text(question)
+    if not normalized:
         return None
-    return (date.fromisoformat(match.group(1)), date.fromisoformat(match.group(2)))
+
+    today = reference_date or date.today()
+    yesterday = today - timedelta(days=1)
+    last_week_start = today - timedelta(days=7)
+    last_week_end = today - timedelta(days=1)
+    month_start = today.replace(day=1)
+    past_30_days_start = today - timedelta(days=29)
+
+    matches: list[tuple[date, date]] = []
+    if _has_any_phrase(normalized, _PLANNER_LEXICON.relative_today_terms):
+        matches.append((today, today))
+    if _has_any_phrase(normalized, _PLANNER_LEXICON.relative_yesterday_terms):
+        matches.append((yesterday, yesterday))
+    if _has_any_phrase(normalized, _PLANNER_LEXICON.relative_last_week_terms):
+        matches.append((last_week_start, last_week_end))
+    if _has_any_phrase(normalized, _PLANNER_LEXICON.relative_this_month_terms):
+        matches.append((month_start, today))
+    if _has_any_phrase(normalized, _PLANNER_LEXICON.relative_past_30_days_terms):
+        matches.append((past_30_days_start, today))
+
+    if len(matches) == 1:
+        return matches[0]
+    return None
 
 
 def _detect_metric(question: str) -> MetricName | None:
-    lowered = question.lower()
-    if "average check" in lowered or "avg check" in lowered:
+    normalized = _normalize_text(question)
+
+    if _has_any_phrase(normalized, _PLANNER_LEXICON.average_metric_terms):
         return MetricName.AVERAGE_CHECK
-    if "order" in lowered:
+    if _has_any_phrase(normalized, _PLANNER_LEXICON.order_metric_terms):
         return MetricName.ORDER_COUNT
-    if "sales" in lowered or "revenue" in lowered:
+    if _has_any_phrase(normalized, _PLANNER_LEXICON.sales_metric_terms):
         return MetricName.SALES_TOTAL
     return None
 
 
 def _needs_breakdown(question: str) -> bool:
-    lowered = question.lower()
-    return "by source" in lowered or "per source" in lowered or "sources" in lowered
+    normalized = _normalize_text(question)
+    return _has_any_phrase(normalized, _PLANNER_LEXICON.breakdown_terms)
+
+
+def _extract_ranking_k(question: str) -> int:
+    normalized = _normalize_text(question)
+    patterns = [
+        r"(?:top|bottom|best|worst|highest|lowest)\s+(\d{1,2})",
+        r"(?:լավագույն|վատագույն|ամենաբարձր|ամենացածր)\s+(\d{1,2})",
+        r"(?:топ|лучш\w*|худш\w*|сам\w*\s+высок\w*|сам\w*\s+низк\w*)\s+(\d{1,2})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, normalized)
+        if not match:
+            continue
+        value = int(match.group(1))
+        if 1 <= value <= 20:
+            return value
+    return 3
 
 
 def _needs_ranking(question: str) -> RankingMode | None:
-    lowered = question.lower()
-    if any(token in lowered for token in ["top", "highest", "best", "most"]):
+    normalized = _normalize_text(question)
+    if _has_any_phrase(normalized, _PLANNER_LEXICON.ranking_top_terms):
         return RankingMode.TOP_K
-    if any(token in lowered for token in ["bottom", "lowest", "worst", "least"]):
+    if _has_any_phrase(normalized, _PLANNER_LEXICON.ranking_bottom_terms):
         return RankingMode.BOTTOM_K
     return None
 
 
 def _needs_trend(question: str) -> bool:
-    lowered = question.lower()
-    return any(
-        token in lowered for token in ["trend", "trending", "over time", "daily", "per day"]
-    )
+    normalized = _normalize_text(question)
+    return _has_any_phrase(normalized, _PLANNER_LEXICON.trend_terms)
 
 
 def _needs_comparison(question: str) -> bool:
-    lowered = question.lower()
-    return any(
-        token in lowered for token in ["compare", "compared", "change", "growth", "vs"]
-    )
+    normalized = _normalize_text(question)
+    return _has_any_phrase(normalized, _PLANNER_LEXICON.comparison_terms)
 
 
 def _build_previous_period(date_from: date, date_to: date) -> tuple[date, date]:
@@ -369,10 +254,15 @@ def plan_analysis(question: str) -> AnalysisPlan:
 
     date_range = _parse_date_range(question)
     if date_range is None:
+        language = _question_language(question)
         clarification_question = (
             "Խնդրում եմ նշեք ժամանակահատվածը YYYY-MM-DD to YYYY-MM-DD ձևաչափով:"
-            if _is_armenian_text(question)
-            else "Please provide a date range in YYYY-MM-DD to YYYY-MM-DD format."
+            if language == "hy"
+            else (
+                "Пожалуйста, укажите диапазон дат в формате YYYY-MM-DD to YYYY-MM-DD."
+                if language == "ru"
+                else "Please provide a date range in YYYY-MM-DD to YYYY-MM-DD format."
+            )
         )
         return AnalysisPlan(
             intent=AnalysisIntent.CLARIFY,
@@ -384,6 +274,7 @@ def plan_analysis(question: str) -> AnalysisPlan:
     date_from, date_to = date_range
     if _needs_breakdown(question):
         ranking_mode = _needs_ranking(question)
+        ranking_k = _extract_ranking_k(question)
         return AnalysisPlan(
             intent=AnalysisIntent.RANKING if ranking_mode else AnalysisIntent.BREAKDOWN,
             retrieval=RetrievalSpec(
@@ -394,7 +285,7 @@ def plan_analysis(question: str) -> AnalysisPlan:
                 dimension=DimensionName.SOURCE,
             ),
             ranking=(
-                RankingSpec(mode=ranking_mode, k=3, metric_key=metric.value)
+                RankingSpec(mode=ranking_mode, k=ranking_k, metric_key=metric.value)
                 if ranking_mode
                 else None
             ),

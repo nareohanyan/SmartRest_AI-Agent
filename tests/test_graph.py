@@ -111,6 +111,49 @@ def test_supported_request_executes_legacy_report_path() -> None:
     assert "sales_total=12345.67" in (final_state.final_answer or "")
 
 
+def test_hy_supported_request_executes_legacy_report_path() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state(
+        "Ի՞նչ էր ընդհանուր վաճառքը 2026-03-01 to 2026-03-07 ժամանակահատվածում։"
+    )
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "plan_analysis",
+        "policy_gate",
+        "route_decision",
+        "prepare_legacy_report",
+        "run_report",
+        "calc_metrics",
+        "compose_answer",
+    ]
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.selected_report_id is ReportType.SALES_TOTAL
+
+
+def test_ru_comparison_routes_to_dynamic_comparison_path() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state("Сравни продажи 2026-03-10 to 2026-03-16 с предыдущим периодом.")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "plan_analysis",
+        "policy_gate",
+        "route_decision",
+        "run_comparison",
+        "compose_answer",
+    ]
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.policy_route is not None
+    assert final_state.policy_route.value == "run_comparison"
+
+
 def test_missing_date_routes_to_clarify() -> None:
     graph = build_agent_graph()
     payload = _initial_state("What were total sales?")
@@ -369,6 +412,69 @@ def test_invalid_llm_plan_payload_falls_back_to_deterministic(
     assert final_state.status is RunStatus.COMPLETED
     assert final_state.plan_source.value == "fallback"
     assert "planner_contract_or_config_fallback" in final_state.warnings
+
+
+def test_low_confidence_llm_plan_falls_back_with_distinct_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llm_payload = {
+        "plan": {
+            "intent": "metric_total",
+            "retrieval": {
+                "mode": "total",
+                "metric": "sales_total",
+                "date_from": "2026-03-01",
+                "date_to": "2026-03-07",
+                "dimension": None,
+            },
+            "compare_to_previous_period": False,
+            "previous_period_retrieval": None,
+            "scalar_calculations": [],
+            "include_moving_average": False,
+            "moving_average_window": 3,
+            "include_trend_slope": False,
+            "ranking": None,
+            "needs_clarification": False,
+            "clarification_question": None,
+            "reasoning_notes": "Low confidence test payload.",
+        },
+        "confidence": 0.3,
+    }
+    fake_client = _FakeLLMClient(output_text=json.dumps(llm_payload))
+    monkeypatch.setattr(graph_module, "get_llm_client", lambda: fake_client)
+    graph = build_agent_graph()
+
+    final_state = AgentState.model_validate(
+        graph.invoke(_initial_state("What were total sales 2026-03-01 to 2026-03-07?"))
+    )
+
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.plan_source.value == "fallback"
+    assert "planner_low_confidence_fallback" in final_state.warnings
+    assert "planner_contract_or_config_fallback" not in final_state.warnings
+    assert "planner_llm_error_fallback" not in final_state.warnings
+
+
+def test_llm_error_falls_back_with_distinct_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeout_error = LLMClientError(
+        "OpenAI request timed out.",
+        category=LLMErrorCategory.TIMEOUT,
+        retryable=True,
+    )
+    fake_client = _FakeLLMClient(exc=timeout_error)
+    monkeypatch.setattr(graph_module, "get_llm_client", lambda: fake_client)
+    graph = build_agent_graph()
+
+    final_state = AgentState.model_validate(
+        graph.invoke(_initial_state("What were total sales 2026-03-01 to 2026-03-07?"))
+    )
+
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.plan_source.value == "fallback"
+    assert "planner_llm_error_fallback" in final_state.warnings
+    assert "planner_low_confidence_fallback" not in final_state.warnings
 
 
 def test_llm_error_propagates_when_mode_is_llm_without_fallback(
