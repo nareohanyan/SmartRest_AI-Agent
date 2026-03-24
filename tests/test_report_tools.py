@@ -110,8 +110,11 @@ def test_resolve_scope_parses_id_level_permissions_from_metadata() -> None:
 
     assert response.allowed_metric_ids == ["sales_total", "completed_order_count"]
     assert response.allowed_dimension_ids == ["source", "branch"]
-    assert response.allowed_metrics == [MetricName.SALES_TOTAL]
-    assert response.allowed_dimensions == [DimensionName.SOURCE]
+    assert response.allowed_metrics == [
+        MetricName.SALES_TOTAL,
+        MetricName.COMPLETED_ORDER_COUNT,
+    ]
+    assert response.allowed_dimensions == [DimensionName.SOURCE, DimensionName.BRANCH]
     assert response.allowed_tool_operations == [ToolOperation.FETCH_TOTAL_METRIC]
 
 

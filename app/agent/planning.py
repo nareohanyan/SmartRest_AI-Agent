@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from datetime import date, timedelta
 
+from app.agent.metric_registry import get_dimension_alias_index, get_metric_alias_index
 from app.agent.planner_lexicon import get_planner_lexicon
 from app.schemas.analysis import (
     AnalysisIntent,
@@ -179,6 +180,24 @@ def _parse_relative_date_range(
 def _detect_metric(question: str) -> MetricName | None:
     normalized = _normalize_text(question)
 
+    tokens = set(normalized.split())
+    alias_items = sorted(
+        get_metric_alias_index().items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    )
+    for alias, metric_id in alias_items:
+        if " " in alias:
+            if alias not in normalized:
+                continue
+        elif alias not in tokens:
+            continue
+
+        try:
+            return MetricName(metric_id)
+        except ValueError:
+            continue
+
     if _has_any_phrase(normalized, _PLANNER_LEXICON.average_metric_terms):
         return MetricName.AVERAGE_CHECK
     if _has_any_phrase(normalized, _PLANNER_LEXICON.order_metric_terms):
@@ -188,9 +207,35 @@ def _detect_metric(question: str) -> MetricName | None:
     return None
 
 
+def _detect_dimension(question: str) -> DimensionName | None:
+    normalized = _normalize_text(question)
+    tokens = set(normalized.split())
+    alias_items = sorted(
+        get_dimension_alias_index().items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    )
+    for alias, dimension_id in alias_items:
+        if " " in alias:
+            if alias not in normalized:
+                continue
+        elif alias not in tokens:
+            continue
+
+        try:
+            return DimensionName(dimension_id)
+        except ValueError:
+            continue
+    return None
+
+
 def _needs_breakdown(question: str) -> bool:
     normalized = _normalize_text(question)
-    return _has_any_phrase(normalized, _PLANNER_LEXICON.breakdown_terms)
+    if _has_any_phrase(normalized, _PLANNER_LEXICON.breakdown_terms):
+        return True
+    if _detect_dimension(question) is None:
+        return False
+    return any(token in normalized.split() for token in ("by", "per", "ըստ", "по"))
 
 
 def _extract_ranking_k(question: str) -> int:
@@ -275,6 +320,8 @@ def plan_analysis(question: str) -> AnalysisPlan:
     if _needs_breakdown(question):
         ranking_mode = _needs_ranking(question)
         ranking_k = _extract_ranking_k(question)
+        requested_dimension = _detect_dimension(question)
+        retrieval_dimension = requested_dimension or DimensionName.SOURCE
         return AnalysisPlan(
             intent=AnalysisIntent.RANKING if ranking_mode else AnalysisIntent.BREAKDOWN,
             retrieval=RetrievalSpec(
@@ -282,7 +329,7 @@ def plan_analysis(question: str) -> AnalysisPlan:
                 metric=metric,
                 date_from=date_from,
                 date_to=date_to,
-                dimension=DimensionName.SOURCE,
+                dimension=retrieval_dimension,
             ),
             ranking=(
                 RankingSpec(mode=ranking_mode, k=ranking_k, metric_key=metric.value)
@@ -290,7 +337,7 @@ def plan_analysis(question: str) -> AnalysisPlan:
                 else None
             ),
             reasoning_notes=(
-                "Breakdown requested by source; ranking applied only when "
+                "Breakdown requested by dimension; ranking applied only when "
                 "explicit superlatives are present."
             ),
         )

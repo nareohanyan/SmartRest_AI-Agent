@@ -16,6 +16,8 @@ def test_build_plan_messages_returns_system_and_user_entries() -> None:
     assert len(messages) == 2
     assert messages[0]["role"] == "system"
     assert messages[1]["role"] == "user"
+    assert "completed_order_count" in messages[0]["content"]
+    assert "branch" in messages[0]["content"]
 
 
 def test_parse_plan_output_json_accepts_valid_payload() -> None:

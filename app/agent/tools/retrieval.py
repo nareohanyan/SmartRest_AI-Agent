@@ -1,16 +1,10 @@
-"""Deterministic retrieval tools for demo-friendly dynamic planning.
-
-This module simulates a thin, typed retrieval layer over SmartRest business
-metrics. In the demo version it generates stable synthetic data from the date
-range, which makes Postman tests predictable while preserving the shape of a
-future real data adapter.
-"""
-
 from __future__ import annotations
 
 from datetime import date, timedelta
 from decimal import Decimal
 
+from app.agent.formula_ast import evaluate_formula_ast
+from app.agent.metric_registry import MetricType, get_metric_registry
 from app.agent.tools.math_helpers import quantize_decimal
 from app.schemas.analysis import (
     BreakdownItem,
@@ -26,11 +20,61 @@ from app.schemas.analysis import (
     TotalMetricResponse,
 )
 
-_SOURCE_WEIGHTS: dict[str, Decimal] = {
-    "glovo": Decimal("0.34"),
-    "wolt": Decimal("0.27"),
-    "direct": Decimal("0.21"),
-    "in_store": Decimal("0.18"),
+_DIMENSION_BUCKET_WEIGHTS: dict[DimensionName, tuple[tuple[str, Decimal], ...]] = {
+    DimensionName.SOURCE: (
+        ("in_store", Decimal("0.24")),
+        ("takeaway", Decimal("0.18")),
+        ("glovo", Decimal("0.27")),
+        ("wolt", Decimal("0.19")),
+        ("yandex", Decimal("0.12")),
+    ),
+    DimensionName.BRANCH: (
+        ("branch_1", Decimal("0.28")),
+        ("branch_2", Decimal("0.24")),
+        ("branch_3", Decimal("0.19")),
+        ("branch_4", Decimal("0.17")),
+        ("branch_5", Decimal("0.12")),
+    ),
+    DimensionName.DAY: (
+        ("monday", Decimal("0.12")),
+        ("tuesday", Decimal("0.13")),
+        ("wednesday", Decimal("0.13")),
+        ("thursday", Decimal("0.14")),
+        ("friday", Decimal("0.16")),
+        ("saturday", Decimal("0.17")),
+        ("sunday", Decimal("0.15")),
+    ),
+    DimensionName.HOUR: (
+        ("08", Decimal("0.06")),
+        ("10", Decimal("0.10")),
+        ("12", Decimal("0.18")),
+        ("14", Decimal("0.17")),
+        ("16", Decimal("0.12")),
+        ("18", Decimal("0.19")),
+        ("20", Decimal("0.18")),
+    ),
+    DimensionName.WEEKDAY: (
+        ("weekday", Decimal("0.74")),
+        ("weekend", Decimal("0.26")),
+    ),
+    DimensionName.PAYMENT_METHOD: (
+        ("cash", Decimal("0.22")),
+        ("card", Decimal("0.58")),
+        ("qr", Decimal("0.08")),
+        ("online_card", Decimal("0.12")),
+    ),
+    DimensionName.CATEGORY: (
+        ("food", Decimal("0.52")),
+        ("drinks", Decimal("0.21")),
+        ("desserts", Decimal("0.13")),
+        ("other", Decimal("0.14")),
+    ),
+    DimensionName.CASHIER: (
+        ("cashier_1", Decimal("0.31")),
+        ("cashier_2", Decimal("0.27")),
+        ("cashier_3", Decimal("0.24")),
+        ("cashier_4", Decimal("0.18")),
+    ),
 }
 
 
@@ -69,36 +113,77 @@ def _daily_order_count(day_index: int) -> Decimal:
     return Decimal("36") + (Decimal(day_index) * Decimal("2")) + weekday_adjustment
 
 
-def _metric_value_for_day(metric: MetricName, day_index: int) -> Decimal:
+def _daily_base_metrics(day_index: int) -> dict[str, Decimal]:
     sales_total = _daily_sales_total(day_index)
-    order_count = _daily_order_count(day_index)
+    completed_order_count = _daily_order_count(day_index)
+    canceled_order_count = (
+        Decimal("2")
+        + (Decimal(day_index % 6) * Decimal("0.3"))
+        + (Decimal(day_index // 5) * Decimal("0.1"))
+    )
+    delivery_order_count = completed_order_count * Decimal("0.46")
+    dine_in_order_count = completed_order_count * Decimal("0.34")
+    refund_amount = sales_total * Decimal("0.03") + (Decimal(day_index % 4) * Decimal("0.8"))
+    discount_amount = sales_total * Decimal("0.11") + (Decimal(day_index % 5) * Decimal("1.1"))
 
-    if metric is MetricName.SALES_TOTAL:
-        return sales_total
-    if metric is MetricName.ORDER_COUNT:
-        return order_count
-    if metric is MetricName.AVERAGE_CHECK:
-        return sales_total / order_count
-    raise ValueError(f"unsupported metric: {metric}")
+    return {
+        "sales_total": sales_total,
+        "order_count": completed_order_count,
+        "completed_order_count": completed_order_count,
+        "canceled_order_count": canceled_order_count,
+        "refund_amount": refund_amount,
+        "discount_amount": discount_amount,
+        "delivery_order_count": delivery_order_count,
+        "dine_in_order_count": dine_in_order_count,
+    }
+
+
+def _metric_value_from_base(metric: MetricName, base_metrics: dict[str, Decimal]) -> Decimal:
+    metric_definition = get_metric_registry().get(metric.value)
+    if metric_definition is None:
+        raise ValueError(f"unknown metric in registry: {metric.value}")
+
+    if metric_definition.metric_type is MetricType.BASE:
+        value = base_metrics.get(metric.value)
+        if value is None:
+            raise ValueError(f"missing base metric value for: {metric.value}")
+        return value
+
+    if metric_definition.formula_ast is None:
+        raise ValueError(f"derived metric is missing formula_ast: {metric.value}")
+    value, _warnings = evaluate_formula_ast(
+        ast=metric_definition.formula_ast,
+        base_metrics=base_metrics,
+    )
+    if value is None:
+        raise ValueError(f"unable to evaluate derived metric: {metric.value}")
+    return value
+
+
+def _metric_value_for_day(metric: MetricName, day_index: int) -> Decimal:
+    base_metrics = _daily_base_metrics(day_index)
+    return _metric_value_from_base(metric, base_metrics)
 
 
 def fetch_total_metric_tool(request: TotalMetricRequest) -> TotalMetricResponse:
-    sales_total_sum = Decimal("0")
-    order_count_sum = Decimal("0")
+    aggregated_base_metrics: dict[str, Decimal] = {
+        "sales_total": Decimal("0"),
+        "order_count": Decimal("0"),
+        "completed_order_count": Decimal("0"),
+        "canceled_order_count": Decimal("0"),
+        "refund_amount": Decimal("0"),
+        "discount_amount": Decimal("0"),
+        "delivery_order_count": Decimal("0"),
+        "dine_in_order_count": Decimal("0"),
+    }
     day_count_int = 0
     for index, _day in enumerate(_daterange(request.date_from, request.date_to)):
-        sales_total_sum += _daily_sales_total(index)
-        order_count_sum += _daily_order_count(index)
+        daily_base_metrics = _daily_base_metrics(index)
+        for metric_id, value in daily_base_metrics.items():
+            aggregated_base_metrics[metric_id] += value
         day_count_int += 1
 
-    if request.metric is MetricName.SALES_TOTAL:
-        total_value = sales_total_sum
-    elif request.metric is MetricName.ORDER_COUNT:
-        total_value = order_count_sum
-    elif request.metric is MetricName.AVERAGE_CHECK:
-        total_value = sales_total_sum / order_count_sum
-    else:
-        raise ValueError(f"unsupported metric: {request.metric}")
+    total_value = _metric_value_from_base(request.metric, aggregated_base_metrics)
 
     day_count = Decimal(day_count_int)
     warnings = [ToolWarningCode.SYNTHETIC_DATA]
@@ -111,6 +196,11 @@ def fetch_total_metric_tool(request: TotalMetricRequest) -> TotalMetricResponse:
         request.metric.value: quantize_decimal(total_value),
         "day_count": day_count,
     }
+    metric_definition = get_metric_registry().get(request.metric.value)
+    if metric_definition is not None:
+        for dependency in metric_definition.dependencies:
+            if dependency in aggregated_base_metrics:
+                base_metrics[dependency] = quantize_decimal(aggregated_base_metrics[dependency])
     return TotalMetricResponse(
         metric=request.metric,
         date_from=request.date_from,
@@ -122,20 +212,21 @@ def fetch_total_metric_tool(request: TotalMetricRequest) -> TotalMetricResponse:
 
 
 def fetch_breakdown_tool(request: BreakdownRequest) -> BreakdownResponse:
-    if request.dimension is not DimensionName.SOURCE:
-        raise ValueError("demo breakdown retrieval only supports source dimension")
+    bucket_weights = _DIMENSION_BUCKET_WEIGHTS.get(request.dimension)
+    if bucket_weights is None:
+        raise ValueError(f"unsupported dimension: {request.dimension}")
 
-    source_totals = {label: Decimal("0") for label in _SOURCE_WEIGHTS}
+    dimension_totals = {label: Decimal("0") for label, _weight in bucket_weights}
     for index, _day in enumerate(_daterange(request.date_from, request.date_to)):
         metric_value = _metric_value_for_day(request.metric, index)
-        for source_index, (label, weight) in enumerate(_SOURCE_WEIGHTS.items()):
-            day_adjustment = Decimal(source_index) * Decimal("0.01")
-            source_totals[label] += metric_value * (weight + day_adjustment)
+        for bucket_index, (label, weight) in enumerate(bucket_weights):
+            day_adjustment = Decimal(bucket_index) * Decimal("0.005")
+            dimension_totals[label] += metric_value * (weight + day_adjustment)
 
-    total_value = sum(source_totals.values(), Decimal("0"))
+    total_value = sum(dimension_totals.values(), Decimal("0"))
     items = [
         BreakdownItem(label=label, value=quantize_decimal(value))
-        for label, value in source_totals.items()
+        for label, value in dimension_totals.items()
     ]
     return BreakdownResponse(
         metric=request.metric,
@@ -149,6 +240,9 @@ def fetch_breakdown_tool(request: BreakdownRequest) -> BreakdownResponse:
 
 
 def fetch_timeseries_tool(request: TimeseriesRequest) -> TimeseriesResponse:
+    if request.dimension is not DimensionName.DAY:
+        raise ValueError("demo timeseries retrieval currently supports day dimension only")
+
     points = [
         TimeseriesPoint(
             bucket=day,

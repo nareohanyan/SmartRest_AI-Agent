@@ -6,10 +6,21 @@ from typing import Any
 
 from pydantic import Field, ValidationError
 
-from app.schemas.analysis import AnalysisPlan
+from app.schemas.analysis import AnalysisPlan, DimensionName, MetricName
 from app.schemas.base import SchemaModel
 
-PLAN_ANALYSIS_SYSTEM_PROMPT = """
+
+def _enum_union_members(enum_type: type[MetricName] | type[DimensionName]) -> str:
+    return " | ".join(f'"{member.value}"' for member in enum_type)
+
+
+_SUPPORTED_METRIC_LIST = ", ".join(member.value for member in MetricName)
+_SUPPORTED_DIMENSION_LIST = ", ".join(member.value for member in DimensionName)
+_METRIC_ENUM_UNION = _enum_union_members(MetricName)
+_DIMENSION_ENUM_UNION = _enum_union_members(DimensionName)
+
+
+_PLAN_ANALYSIS_SYSTEM_PROMPT_TEMPLATE = """
 You are SmartRest's planning engine.
 Convert the user request into a strict analysis execution plan.
 
@@ -20,18 +31,18 @@ Return JSON only with this exact shape:
       "ranking" | "smalltalk" | "clarify" | "unsupported",
     "retrieval": {
       "mode": "total" | "breakdown" | "timeseries",
-      "metric": "sales_total" | "order_count" | "average_check",
+      "metric": <<METRIC_ENUM_UNION>>,
       "date_from": "YYYY-MM-DD",
       "date_to": "YYYY-MM-DD",
-      "dimension": "source" | "day" | null
+      "dimension": <<DIMENSION_ENUM_UNION>> | null
     } | null,
     "compare_to_previous_period": boolean,
     "previous_period_retrieval": {
       "mode": "total" | "breakdown" | "timeseries",
-      "metric": "sales_total" | "order_count" | "average_check",
+      "metric": <<METRIC_ENUM_UNION>>,
       "date_from": "YYYY-MM-DD",
       "date_to": "YYYY-MM-DD",
-      "dimension": "source" | "day" | null
+      "dimension": <<DIMENSION_ENUM_UNION>> | null
     } | null,
     "scalar_calculations": [],
     "include_moving_average": boolean,
@@ -54,9 +65,17 @@ Rules:
 - For greetings/smalltalk (for example hi, hello), output intent "smalltalk".
 - If required dates are missing, output intent "clarify" and a clarification question.
 - Never invent unknown metrics, dimensions, or retrieval modes.
-- Use supported metrics only: sales_total, order_count, average_check.
+- Supported metrics: <<SUPPORTED_METRIC_LIST>>.
+- Supported dimensions: <<SUPPORTED_DIMENSION_LIST>>.
 - Output JSON only, no markdown, no prose, no extra keys.
 """.strip()
+
+PLAN_ANALYSIS_SYSTEM_PROMPT = (
+    _PLAN_ANALYSIS_SYSTEM_PROMPT_TEMPLATE.replace("<<METRIC_ENUM_UNION>>", _METRIC_ENUM_UNION)
+    .replace("<<DIMENSION_ENUM_UNION>>", _DIMENSION_ENUM_UNION)
+    .replace("<<SUPPORTED_METRIC_LIST>>", _SUPPORTED_METRIC_LIST)
+    .replace("<<SUPPORTED_DIMENSION_LIST>>", _SUPPORTED_DIMENSION_LIST)
+)
 
 
 class PlanningContractError(ValueError):

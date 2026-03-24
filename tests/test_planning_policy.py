@@ -155,6 +155,51 @@ def test_policy_rejects_ranking_without_source_breakdown() -> None:
     assert decision.reason_code == "unsupported_retrieval_mode"
 
 
+def test_policy_routes_breakdown_to_dynamic_execution() -> None:
+    decision = evaluate_plan_policy(
+        plan_intent=AnalysisIntent.BREAKDOWN,
+        retrieval_mode=RetrievalMode.BREAKDOWN,
+        retrieval_metric=MetricName.SALES_TOTAL,
+        retrieval_dimension=DimensionName.BRANCH,
+        date_from=date(2026, 3, 1),
+        date_to=date(2026, 3, 7),
+        scope=_granted_scope(
+            ReportType.SALES_TOTAL,
+            allowed_tool_operations=[ToolOperation.FETCH_BREAKDOWN],
+        ),
+        settings=_settings(),
+    )
+
+    assert decision.route is PolicyRoute.RUN_RANKING
+    assert decision.reason_code == "ok"
+    assert decision.allowed is True
+
+
+def test_policy_allows_ranking_for_non_source_dimension() -> None:
+    decision = evaluate_plan_policy(
+        plan_intent=AnalysisIntent.RANKING,
+        retrieval_mode=RetrievalMode.BREAKDOWN,
+        retrieval_metric=MetricName.SALES_TOTAL,
+        retrieval_dimension=DimensionName.BRANCH,
+        date_from=date(2026, 3, 1),
+        date_to=date(2026, 3, 7),
+        ranking_mode=RankingMode.TOP_K,
+        scope=_granted_scope(
+            ReportType.SALES_TOTAL,
+            allowed_tool_operations=[
+                ToolOperation.FETCH_BREAKDOWN,
+                ToolOperation.ATTACH_BREAKDOWN_SHARE,
+                ToolOperation.TOP_K,
+            ],
+        ),
+        settings=_settings(),
+    )
+
+    assert decision.route is PolicyRoute.RUN_RANKING
+    assert decision.reason_code == "ok"
+    assert decision.allowed is True
+
+
 def test_policy_rejects_when_metric_id_permission_is_missing() -> None:
     decision = evaluate_plan_policy(
         plan_intent=AnalysisIntent.METRIC_TOTAL,

@@ -5,7 +5,13 @@ from datetime import date
 from app.agent.planning import plan_analysis
 from app.agent.tools import compute_metrics_tool, fetch_total_metric_tool
 from app.agent.tools.math_helpers import quantize_decimal
-from app.schemas.analysis import AnalysisIntent, MetricName, RetrievalMode, TotalMetricRequest
+from app.schemas.analysis import (
+    AnalysisIntent,
+    DimensionName,
+    MetricName,
+    RetrievalMode,
+    TotalMetricRequest,
+)
 
 
 def test_legacy_tool_import_surface_is_preserved() -> None:
@@ -40,6 +46,23 @@ def test_hy_ranking_detects_requested_k_value() -> None:
     assert plan.intent is AnalysisIntent.RANKING
     assert plan.ranking is not None
     assert plan.ranking.k == 5
+
+
+def test_planner_resolves_registry_metric_alias_for_completed_orders() -> None:
+    plan = plan_analysis("Show completed orders 2026-03-01 to 2026-03-07")
+
+    assert plan.intent is AnalysisIntent.METRIC_TOTAL
+    assert plan.retrieval is not None
+    assert plan.retrieval.metric is MetricName.COMPLETED_ORDER_COUNT
+
+
+def test_planner_detects_breakdown_dimension_from_registry_aliases() -> None:
+    plan = plan_analysis("Show sales by branch 2026-03-01 to 2026-03-07")
+
+    assert plan.intent is AnalysisIntent.BREAKDOWN
+    assert plan.retrieval is not None
+    assert plan.retrieval.mode is RetrievalMode.BREAKDOWN
+    assert plan.retrieval.dimension is DimensionName.BRANCH
 
 
 def test_relative_today_is_mapped_to_single_day_range() -> None:

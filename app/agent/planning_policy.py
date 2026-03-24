@@ -305,7 +305,7 @@ def evaluate_plan_policy(
     if missing_dimension_ids:
         return _reject_missing_dimension(missing_dimension_ids[0])
 
-    if plan_intent in {AnalysisIntent.METRIC_TOTAL, AnalysisIntent.BREAKDOWN}:
+    if plan_intent is AnalysisIntent.METRIC_TOTAL:
         mapped_report_id = _map_retrieval_to_report(
             mode=retrieval_mode,
             metric=retrieval_metric,
@@ -334,6 +334,25 @@ def evaluate_plan_policy(
             allowed=True,
         )
 
+    if plan_intent is AnalysisIntent.BREAKDOWN:
+        if retrieval_mode is not RetrievalMode.BREAKDOWN or retrieval_dimension is None:
+            return PolicyDecision(
+                route=PolicyRoute.REJECT,
+                reason_code="unsupported_retrieval_mode",
+                reason_message="Breakdown requires breakdown retrieval with dimension.",
+                allowed=False,
+            )
+        required_tools = list(planner_constraints.required_runtime_operations)
+        missing_tools = _missing_tool_permissions(required_tools=required_tools, scope=scope)
+        if missing_tools:
+            return _reject_missing_tool(missing_tools[0])
+        return PolicyDecision(
+            route=PolicyRoute.RUN_RANKING,
+            reason_code="ok",
+            reason_message="Plan is allowed for breakdown execution.",
+            allowed=True,
+        )
+
     if plan_intent is AnalysisIntent.COMPARISON:
         if retrieval_mode is not RetrievalMode.TOTAL:
             return PolicyDecision(
@@ -354,14 +373,11 @@ def evaluate_plan_policy(
         )
 
     if plan_intent is AnalysisIntent.RANKING:
-        if (
-            retrieval_mode is not RetrievalMode.BREAKDOWN
-            or retrieval_dimension is not DimensionName.SOURCE
-        ):
+        if retrieval_mode is not RetrievalMode.BREAKDOWN or retrieval_dimension is None:
             return PolicyDecision(
                 route=PolicyRoute.REJECT,
                 reason_code="unsupported_retrieval_mode",
-                reason_message="Ranking requires source breakdown retrieval.",
+                reason_message="Ranking requires breakdown retrieval with dimension.",
                 allowed=False,
             )
         required_tools = list(planner_constraints.required_runtime_operations)

@@ -588,16 +588,17 @@ def _run_ranking_node(state: AgentState) -> dict[str, Any]:
     if plan is None or plan.retrieval is None:
         return {
             "status": RunStatus.FAILED,
-            "final_answer": "Ranking failed: missing retrieval context.",
-            "warnings": [*state.warnings, "ranking_missing_context"],
+            "final_answer": "Breakdown failed: missing retrieval context.",
+            "warnings": [*state.warnings, "breakdown_missing_context"],
         }
 
     tool_registry = get_tool_registry()
     execution_trace = state.execution_trace
+    requested_dimension = plan.retrieval.dimension or DimensionName.SOURCE
 
     breakdown_request = BreakdownRequest(
         metric=plan.retrieval.metric,
-        dimension=DimensionName.SOURCE,
+        dimension=requested_dimension,
         date_from=plan.retrieval.date_from,
         date_to=plan.retrieval.date_to,
     )
@@ -611,53 +612,54 @@ def _run_ranking_node(state: AgentState) -> dict[str, Any]:
         started_at=breakdown_started_at,
         warnings=_stringify_tool_warnings(breakdown.warnings),
     )
-    attach_share_started_at = perf_counter()
-    enriched = tool_registry.invoke(ToolId.ATTACH_BREAKDOWN_SHARE, breakdown)
-    execution_trace = _append_tool_trace_step(
-        execution_trace,
-        step_id="tool.attach_breakdown_share",
-        input_ref="breakdown_response",
-        output_ref="breakdown_response_enriched",
-        started_at=attach_share_started_at,
-        warnings=_stringify_tool_warnings(enriched.warnings),
-    )
+    ranked_items = breakdown.items
+    warnings = [*state.warnings, *_stringify_tool_warnings(breakdown.warnings)]
 
-    ranked_items = enriched.items
-    if plan.ranking is not None:
-        rank_request = RankItemsRequest(items=enriched.items, ranking=plan.ranking)
-        ranking_started_at = perf_counter()
-        if plan.ranking.mode.value == "top_k":
-            ranked_items = tool_registry.invoke(ToolId.TOP_K, rank_request).items
-            rank_step_id = "tool.top_k"
-        else:
-            ranked_items = tool_registry.invoke(ToolId.BOTTOM_K, rank_request).items
-            rank_step_id = "tool.bottom_k"
+    if plan.intent is AnalysisIntent.RANKING:
+        attach_share_started_at = perf_counter()
+        enriched = tool_registry.invoke(ToolId.ATTACH_BREAKDOWN_SHARE, breakdown)
         execution_trace = _append_tool_trace_step(
             execution_trace,
-            step_id=rank_step_id,
-            input_ref="ranking_request",
-            output_ref="ranked_items",
-            started_at=ranking_started_at,
+            step_id="tool.attach_breakdown_share",
+            input_ref="breakdown_response",
+            output_ref="breakdown_response_enriched",
+            started_at=attach_share_started_at,
+            warnings=_stringify_tool_warnings(enriched.warnings),
         )
+        ranked_items = enriched.items
+        warnings = [*warnings, *_stringify_tool_warnings(enriched.warnings)]
 
-    summary_items = ", ".join(
-        f"{item.label}={item.value:.2f}" for item in ranked_items
-    )
+        if plan.ranking is not None:
+            rank_request = RankItemsRequest(items=enriched.items, ranking=plan.ranking)
+            ranking_started_at = perf_counter()
+            if plan.ranking.mode.value == "top_k":
+                ranked_items = tool_registry.invoke(ToolId.TOP_K, rank_request).items
+                rank_step_id = "tool.top_k"
+            else:
+                ranked_items = tool_registry.invoke(ToolId.BOTTOM_K, rank_request).items
+                rank_step_id = "tool.bottom_k"
+            execution_trace = _append_tool_trace_step(
+                execution_trace,
+                step_id=rank_step_id,
+                input_ref="ranking_request",
+                output_ref="ranked_items",
+                started_at=ranking_started_at,
+            )
+
+    summary_items = ", ".join(f"{item.label}={item.value:.2f}" for item in ranked_items)
+    summary_prefix = "Ranking" if plan.intent is AnalysisIntent.RANKING else "Breakdown"
     summary = (
-        f"Ranking for {plan.retrieval.metric.value} by source "
+        f"{summary_prefix} for {plan.retrieval.metric.value} by {requested_dimension.value} "
         f"({plan.retrieval.date_from} to {plan.retrieval.date_to}): {summary_items}."
     )
 
     return {
         "analysis_artifacts": {
             **state.analysis_artifacts,
-            "kind": "ranking",
+            "kind": "ranking" if plan.intent is AnalysisIntent.RANKING else "breakdown",
             "summary": summary,
         },
-        "warnings": [
-            *state.warnings,
-            *_stringify_tool_warnings(enriched.warnings),
-        ],
+        "warnings": warnings,
         "execution_trace": execution_trace,
     }
 

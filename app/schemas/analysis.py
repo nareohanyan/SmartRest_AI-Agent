@@ -15,11 +15,25 @@ class MetricName(str, Enum):
     SALES_TOTAL = "sales_total"
     ORDER_COUNT = "order_count"
     AVERAGE_CHECK = "average_check"
+    COMPLETED_ORDER_COUNT = "completed_order_count"
+    CANCELED_ORDER_COUNT = "canceled_order_count"
+    REFUND_AMOUNT = "refund_amount"
+    DISCOUNT_AMOUNT = "discount_amount"
+    REFUND_RATE = "refund_rate"
+    DISCOUNT_SHARE = "discount_share"
+    DELIVERY_ORDER_COUNT = "delivery_order_count"
+    DINE_IN_ORDER_COUNT = "dine_in_order_count"
 
 
 class DimensionName(str, Enum):
+    BRANCH = "branch"
     SOURCE = "source"
     DAY = "day"
+    HOUR = "hour"
+    WEEKDAY = "weekday"
+    PAYMENT_METHOD = "payment_method"
+    CATEGORY = "category"
+    CASHIER = "cashier"
 
 
 class RetrievalMode(str, Enum):
@@ -146,7 +160,7 @@ class BreakdownItem(SchemaModel):
 
 class BreakdownRequest(SchemaModel):
     metric: MetricName
-    dimension: Literal[DimensionName.SOURCE]
+    dimension: DimensionName
     date_from: date
     date_to: date
 
@@ -170,7 +184,7 @@ class TimeseriesRequest(SchemaModel):
     metric: MetricName
     date_from: date
     date_to: date
-    dimension: Literal[DimensionName.DAY] = DimensionName.DAY
+    dimension: DimensionName = DimensionName.DAY
 
 
 class TimeseriesResponse(SchemaModel):
