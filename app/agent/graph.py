@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from langgraph.graph import END, StateGraph
@@ -92,7 +92,8 @@ _LOCALIZED_MESSAGES: dict[str, dict[str, str]] = {
     },
     "hy": {
         "access_denied_missing_scope": "Մուտքը մերժված է՝ scope request-ը բացակայում է։",
-        "clarify_need_date_range": "Խնդրում եմ հստակեցրեք՝ որ հաշվետվությունը կամ ֆիլտրն եք ուզում օգտագործել։",
+        "clarify_need_date_range": "Խնդրում եմ հստակեցրեք՝ որ "
+                                   "հաշվետվությունը կամ ֆիլտրն եք ուզում օգտագործել։",
         "unsupported_request": (
             "Չաջակցվող հարցում։ Աջակցվում են վաճառք, աղբյուրներ, առաքիչներ, "
             "հաճախորդներ, հասցեներ, առաքման վճար, վճարումներ, մնացորդ, "
@@ -117,7 +118,8 @@ _LOCALIZED_MESSAGES: dict[str, dict[str, str]] = {
     },
     "ru": {
         "access_denied_missing_scope": "Доступ запрещен: отсутствует scope request.",
-        "clarify_need_date_range": "Пожалуйста, уточните, какой отчет или фильтр нужно использовать.",
+        "clarify_need_date_range": "Пожалуйста, уточните, "
+                                   "какой отчет или фильтр нужно использовать.",
         "unsupported_request": (
             "Неподдерживаемый запрос. Поддерживаются аналитика продаж, источников, "
             "курьеров, клиентов, локаций, доставки, оплат, задолженности, "
@@ -1772,7 +1774,8 @@ def _generate_interpretation_payload(question: str) -> dict[str, Any]:
             "report_id": selected_report_id,
             "filters": None,
             "needs_clarification": True,
-            "clarification_question": "Please provide a valid date range using YYYY-MM-DD to YYYY-MM-DD.",
+            "clarification_question": "Please provide a valid date "
+                                      "range using YYYY-MM-DD to YYYY-MM-DD.",
             "confidence": 0.55,
             "reasoning_notes": "An explicit date range was present but could not be parsed safely.",
         }
@@ -2323,11 +2326,14 @@ def _small_talk_fallback_response(state: AgentState) -> str:
         _contains_text_term(normalized_question, term)
         for term in ("thanks", "thank you", "thx", "spasibo", "shnorhakal", "shnorhakalutyun")
     ):
+        response_message = (f"You're welcome. I can also help with "
+                            f"restaurant analytics such as {capability_text}.")
         if language == "hy":
-            return f"Խնդրեմ։ Կարող եմ օգնել նաև {capability_text} հարցերով։"
+            response_message = f"Խնդրեմ։ Կարող եմ օգնել նաև {capability_text} հարցերով։"
         if language == "ru":
-            return f"Пожалуйста. Я также могу помочь с аналитикой по темам: {capability_text}."
-        return f"You're welcome. I can also help with restaurant analytics such as {capability_text}."
+            response_message = (f"Пожалуйста. Я также могу помочь с "
+                                f"аналитикой по темам: {capability_text}.")
+        return response_message
 
     if any(
         _contains_text_term(normalized_question, term)
