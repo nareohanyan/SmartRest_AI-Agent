@@ -55,6 +55,17 @@ def _default_to_missing_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(graph_module, "get_llm_client", _missing_openai_key)
 
 
+@pytest.fixture(autouse=True)
+def _force_mock_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMARTREST_EXCEL_REPORT_FILE_PATH", "")
+    monkeypatch.setenv("EXCEL_REPORT_FILE_PATH", "")
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        get_settings.cache_clear()
+
+
 def _scope_request_payload(*, deny: bool = False) -> dict[str, object]:
     metadata: dict[str, str] = {"access": "deny"} if deny else {}
     return {
@@ -111,7 +122,7 @@ def test_supported_request_executes_full_run_path() -> None:
     assert final_state.derived_metrics[0].key == "sales_total_per_day"
     assert final_state.final_answer is not None
     assert "total sales" in final_state.final_answer.lower()
-    assert "per day" in final_state.final_answer.lower()
+    assert "per day" not in final_state.final_answer.lower()
     assert "=" not in final_state.final_answer
 
 
@@ -134,6 +145,21 @@ def test_small_talk_routes_without_report_execution() -> None:
     assert final_state.tool_responses.run_report is None
     assert final_state.final_answer is not None
     assert "analytics" in final_state.final_answer.lower()
+
+
+def test_small_talk_uses_llm_generation_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_client = _FakeLLMClient(output_text="Hello. Ask me about sales or orders.")
+    monkeypatch.setattr(graph_module, "get_llm_client", lambda: fake_client)
+    graph = build_agent_graph()
+
+    final_state = AgentState.model_validate(graph.invoke(_initial_state("Hello there")))
+
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.tool_responses.run_report is None
+    assert final_state.final_answer == "Hello. Ask me about sales or orders."
+    assert len(fake_client.calls) == 1
 
 
 def test_greeting_with_analytics_request_prioritizes_report_path() -> None:
@@ -188,6 +214,26 @@ def test_multi_intent_request_returns_structured_multi_block_answer(
         assert "\n\n" in final_state.final_answer
         assert "1. " not in final_state.final_answer
         assert "=" not in final_state.final_answer
+    finally:
+        get_settings.cache_clear()
+
+
+def test_multi_intent_request_preserves_sentence_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SMARTREST_EXCEL_REPORT_FILE_PATH", "")
+    monkeypatch.setenv("EXCEL_REPORT_FILE_PATH", "")
+    get_settings.cache_clear()
+    try:
+        graph = build_agent_graph()
+        payload = _initial_state("Show total sales and top locations 2026-03-01 to 2026-03-07.")
+
+        final_state = AgentState.model_validate(graph.invoke(payload))
+
+        assert final_state.status is RunStatus.COMPLETED
+        assert final_state.selected_report_id is ReportType.SALES_TOTAL
+        assert len(final_state.additional_run_reports) == 1
+        assert final_state.additional_run_reports[0].result.report_id is ReportType.TOP_LOCATIONS
     finally:
         get_settings.cache_clear()
 
@@ -276,7 +322,7 @@ def test_rejected_answer_is_localized_for_russian_question() -> None:
     assert final_state.final_answer.startswith("Неподдерживаемый запрос")
 
 
-def test_missing_date_routes_to_clarify_without_report_execution() -> None:
+def test_missing_date_defaults_to_all_time_without_clarification() -> None:
     graph = build_agent_graph()
     payload = _initial_state("What were total sales?")
 
@@ -287,13 +333,18 @@ def test_missing_date_routes_to_clarify_without_report_execution() -> None:
         "resolve_scope",
         "openai_interpret",
         "authorize_report",
-        "clarify",
+        "run_report",
+        "calc_metrics",
+        "reason_over_results",
+        "compose_output",
         "persist_run",
     ]
-    assert final_state.status is RunStatus.CLARIFY
-    assert final_state.needs_clarification is True
-    assert final_state.tool_responses.run_report is None
-    assert "date range" in (final_state.final_answer or "").lower()
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.needs_clarification is False
+    assert final_state.tool_responses.run_report is not None
+    assert final_state.filters is not None
+    assert final_state.filters.date_from == date(2026, 3, 1)
+    assert final_state.filters.date_to == date(2026, 3, 7)
 
 
 def test_delivery_count_with_armenian_location_without_exact_match_clarifies() -> None:
@@ -318,21 +369,46 @@ def test_delivery_count_with_armenian_courier_resolves_to_canonical_value() -> N
     assert final_state.status is RunStatus.COMPLETED
     assert final_state.selected_report_id is ReportType.ORDER_COUNT
     assert final_state.filters is not None
-    assert final_state.filters.courier == "Azat"
+    assert final_state.filters.courier == "azat"
     assert final_state.filters.location is None
     assert final_state.filters.phone_number is None
 
 
-def test_order_count_query_resolves_exact_phone_number_filter() -> None:
+def test_translit_delivery_count_with_trailing_courier_resolves() -> None:
     graph = build_agent_graph()
-    payload = _initial_state("010311111 համարից քանի պատվեր է եղել 2024-12-01 to 2024-12-31")
+    payload = _initial_state("es amsva mej qani hat araquma arel Yandexy")
 
     final_state = AgentState.model_validate(graph.invoke(payload))
 
     assert final_state.status is RunStatus.COMPLETED
     assert final_state.selected_report_id is ReportType.ORDER_COUNT
     assert final_state.filters is not None
-    assert final_state.filters.phone_number == "010311111"
+    assert final_state.filters.date_from == date(2026, 3, 1)
+    assert final_state.filters.date_to == date(2026, 3, 24)
+    assert final_state.filters.courier == "yandex"
+    assert final_state.final_answer is not None
+    assert "yandex" in final_state.final_answer.lower()
+
+
+def test_armenian_delivery_count_phrase_maps_to_order_count_and_courier_slot() -> None:
+    query = "Արթուրի ընդհանուր առաքումներ քանակը որքան է կազմում"
+
+    assert graph_module._detect_report_id(query) is ReportType.ORDER_COUNT
+    slots = graph_module._extract_query_slots(query)
+    assert slots.metric == "order_count"
+    assert slots.courier == "արթուր"
+
+
+def test_order_count_query_resolves_exact_phone_number_filter() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state("094727202 համարից քանի պատվեր է եղել 2024-12-01 to 2024-12-31")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.selected_report_id is ReportType.ORDER_COUNT
+    assert final_state.filters is not None
+    assert final_state.filters.phone_number == "094727202"
 
 
 def test_order_count_filter_resolution_uses_llm_candidate_selection(
@@ -481,6 +557,34 @@ def test_extract_filters_supports_armenian_month_suffix_relative_period(
     assert filters is not None
     assert filters.date_from == date(2026, 1, 1)
     assert filters.date_to == date(2026, 3, 19)
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Show total sales es amis",
+        "Show total sales ays amsva",
+    ],
+)
+def test_extract_filters_supports_armenian_translit_month_variants(
+    monkeypatch: pytest.MonkeyPatch,
+    question: str,
+) -> None:
+    monkeypatch.setattr(graph_module, "_today", lambda: date(2026, 3, 19))
+
+    filters = graph_module._extract_filters(question)
+
+    assert filters is not None
+    assert filters.date_from == date(2026, 3, 1)
+    assert filters.date_to == date(2026, 3, 19)
+
+
+def test_extract_filters_defaults_to_available_range_when_missing() -> None:
+    filters = graph_module._extract_filters("What were total sales?")
+
+    assert filters is not None
+    assert filters.date_from == date(2026, 3, 1)
+    assert filters.date_to == date(2026, 3, 7)
 
 
 def test_extract_filters_supports_this_quarter(monkeypatch: pytest.MonkeyPatch) -> None:

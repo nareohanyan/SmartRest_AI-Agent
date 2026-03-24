@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
+from datetime import date
 from typing import Any
 
 from pydantic import Field, ValidationError, model_validator
@@ -67,7 +68,10 @@ Interpretation policy:
   Use them whenever the user specifies them and they are relevant to the selected report.
 - If user provides a relative period (today, yesterday, this/last week, this/last month,
   this/last year, last N days/weeks/months/years), resolve to concrete date_from/date_to.
-- Ask clarification only when no executable time window can be inferred.
+- If the user omits a time window, treat it as an all-time request instead of asking for
+  clarification only because time is missing.
+- Ask clarification only when the report/filter intent is ambiguous or a required filter value
+  cannot be resolved safely.
 - Never invent unsupported metrics, report IDs, or filter keys.
 - Interpret broad business phrasing:
   sales = revenue / turnover / выручка / շրջանառություն
@@ -116,9 +120,21 @@ Output rules:
 """.strip()
 
 CLARIFICATION_FALLBACK_QUESTION = (
-    "Please clarify your request with report type and either an explicit date range "
-    "(YYYY-MM-DD to YYYY-MM-DD) or a relative period (today, last week, last 3 months)."
+    "Please clarify which report or filter you want me to use."
 )
+
+SMALL_TALK_SYSTEM_PROMPT = """
+You are SmartRest's restaurant analytics assistant.
+Your job is to answer a non-analytics conversational message naturally and briefly.
+
+Response policy:
+- Reply in the same language as the user when it is clear from the message.
+- Keep the answer to 1-2 short sentences.
+- Sound natural, not robotic.
+- You may mention that you can help with restaurant analytics such as sales, orders,
+  couriers, customers, locations, payments, and trends.
+- Do not invent data, metrics, or actions that were not requested.
+""".strip()
 
 
 class InterpretationContractError(ValueError):
@@ -184,7 +200,11 @@ class FilterMatchOutput(SchemaModel):
     reasoning_notes: str | None = None
 
 
-def build_interpret_request_messages(user_question: str) -> list[dict[str, str]]:
+def build_interpret_request_messages(
+    user_question: str,
+    *,
+    current_date: date | None = None,
+) -> list[dict[str, str]]:
     if re.search(r"[\u0531-\u0556\u0561-\u0587]", user_question):
         language_name = "Armenian"
     elif re.search(r"[\u0400-\u04FF]", user_question):
@@ -201,10 +221,42 @@ def build_interpret_request_messages(user_question: str) -> list[dict[str, str]]
         f'"{language_name}".'
     )
 
+    date_instruction = ""
+    if current_date is not None:
+        date_instruction = (
+            "\n\nTime policy:\n"
+            f"- Current date is {current_date.isoformat()}.\n"
+            "- Resolve relative periods (today, yesterday, this/last week, etc.) using this date."
+        )
+
     return [
         {
             "role": "system",
-            "content": f"{INTERPRET_REQUEST_SYSTEM_PROMPT}\n\n{language_instruction}",
+            "content": (
+                f"{INTERPRET_REQUEST_SYSTEM_PROMPT}\n\n"
+                f"{language_instruction}"
+                f"{date_instruction}"
+            ),
+        },
+        {"role": "user", "content": user_question},
+    ]
+
+
+def build_small_talk_messages(user_question: str) -> list[dict[str, str]]:
+    if re.search(r"[\u0531-\u0556\u0561-\u0587]", user_question):
+        language_name = "Armenian"
+    elif re.search(r"[\u0400-\u04FF]", user_question):
+        language_name = "Russian"
+    else:
+        language_name = "English"
+
+    return [
+        {
+            "role": "system",
+            "content": (
+                f"{SMALL_TALK_SYSTEM_PROMPT}\n\n"
+                f'Reply language policy: prefer "{language_name}" for the final answer.'
+            ),
         },
         {"role": "user", "content": user_question},
     ]

@@ -15,6 +15,7 @@ from app.agent.report_tools import (
 )
 from app.core.config import get_settings
 from app.reports import MOCK_BACKEND_WARNING, REPORT_CATALOG_ORDER
+from app.reports.filter_resolution import normalize_lookup_text, resolve_filter_value_from_catalog
 from app.schemas.reports import ReportFilters, ReportRequest, ReportType
 from app.schemas.tools import (
     AccessStatus,
@@ -184,6 +185,36 @@ def test_resolve_filter_value_tool_resolves_transliterated_mock_courier() -> Non
 
     assert response.status is ResolveFilterValueStatus.RESOLVED
     assert response.matched_value == "azat"
+
+
+def test_normalize_lookup_text_handles_armenian_u_digraph() -> None:
+    assert normalize_lookup_text("Արթուր") == "artur"
+    assert normalize_lookup_text("Արթուրի") == "arturi"
+
+
+def test_resolve_filter_value_from_catalog_matches_armenian_artur_to_latin_candidate() -> None:
+    response = resolve_filter_value_from_catalog(
+        report_id=ReportType.ORDER_COUNT,
+        filter_key="courier",
+        raw_value="Արթուր",
+        catalog_values=["artur", "azat", "edgar"],
+    )
+
+    assert response.status is ResolveFilterValueStatus.RESOLVED
+    assert response.matched_value == "artur"
+
+
+def test_resolve_filter_value_tool_resolves_translit_courier_suffix_variant() -> None:
+    response = resolve_filter_value_tool(
+        ResolveFilterValueRequest(
+            report_id=ReportType.ORDER_COUNT,
+            filter_key="courier",
+            raw_value="Yandexy",
+        )
+    )
+
+    assert response.status is ResolveFilterValueStatus.RESOLVED
+    assert response.matched_value == "yandex"
 
 
 def test_resolve_filter_value_tool_returns_mock_location_candidates_for_partial_match() -> None:

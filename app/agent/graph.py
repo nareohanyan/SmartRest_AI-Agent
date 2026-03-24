@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import re
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -19,6 +20,7 @@ from app.agent.llm import (
     LLMClientError,
     build_filter_match_messages,
     build_interpret_request_messages,
+    build_small_talk_messages,
     get_llm_client,
     parse_filter_match_output_json,
     parse_interpretation_output_json,
@@ -26,8 +28,12 @@ from app.agent.llm import (
 )
 from app.agent.metrics_mapper import map_report_response_to_base_metrics
 from app.agent.report_tools import resolve_filter_value_tool, resolve_scope_tool, run_report_tool
+from app.core.config import get_settings
 from app.persistence.runtime_persistence import RuntimePersistenceService
 from app.reports import get_report_definition
+from app.reports.excel_backend import get_excel_data_date_range
+from app.reports.filter_resolution import normalize_lookup_text
+from app.reports.mock_backend import get_mock_data_date_range
 from app.schemas.agent import AgentState, IntentType, LLMErrorCategory, RunStatus
 from app.schemas.calculations import ComputeMetricsRequest
 from app.schemas.reports import ReportFilterKey, ReportFilters, ReportRequest, ReportType
@@ -53,6 +59,7 @@ _FILTER_FIELD_BY_KEY = {
 }
 _DEFAULT_CLARIFICATION_QUESTIONS = {
     CLARIFICATION_FALLBACK_QUESTION,
+    "Please clarify which report or filter you want me to use.",
     "Please provide a date range using YYYY-MM-DD to YYYY-MM-DD.",
     (
         "Please provide a date range (YYYY-MM-DD to YYYY-MM-DD) "
@@ -64,18 +71,11 @@ _DEFAULT_CLARIFICATION_QUESTIONS = {
 _LOCALIZED_MESSAGES: dict[str, dict[str, str]] = {
     "en": {
         "access_denied_missing_scope": "Access denied: missing scope request.",
-        "clarify_need_date_range": (
-            "Please provide a date range (YYYY-MM-DD to YYYY-MM-DD) "
-            "or a relative period like today, last week, or last 3 months."
-        ),
+        "clarify_need_date_range": "Please clarify which report or filter you want me to use.",
         "unsupported_request": (
             "Unsupported request. Supported scopes include sales, sources, couriers, "
             "customers, locations, delivery fees, payments, balances, weekday and daily trends, "
             "and gross-profit analytics."
-        ),
-        "small_talk_response": (
-            "Hi. I can help with restaurant analytics. "
-            "Ask about sales, orders, customers, locations, payments, or trends."
         ),
         "access_denied_request": "Access denied for this request.",
         "run_failed_internal": "Run failed due to internal processing error.",
@@ -92,15 +92,11 @@ _LOCALIZED_MESSAGES: dict[str, dict[str, str]] = {
     },
     "hy": {
         "access_denied_missing_scope": "Մուտքը մերժված է՝ scope request-ը բացակայում է։",
-        "clarify_need_date_range": "Նշեք ամսաթվերի միջակայք՝ YYYY-MM-DD to YYYY-MM-DD ձևաչափով։",
+        "clarify_need_date_range": "Խնդրում եմ հստակեցրեք՝ որ հաշվետվությունը կամ ֆիլտրն եք ուզում օգտագործել։",
         "unsupported_request": (
             "Չաջակցվող հարցում։ Աջակցվում են վաճառք, աղբյուրներ, առաքիչներ, "
             "հաճախորդներ, հասցեներ, առաքման վճար, վճարումներ, մնացորդ, "
             "օրական և շաբաթվա տրենդեր, ինչպես նաև համախառն շահույթի վերլուծություն։"
-        ),
-        "small_talk_response": (
-            "Բարև։ Կարող եմ օգնել ռեստորանի վերլուծություններով։ "
-            "Հարցրեք վաճառքի, պատվերների, հաճախորդների, հասցեների, վճարումների կամ տրենդերի մասին։"
         ),
         "access_denied_request": "Այս հարցման համար մուտքը մերժված է։",
         "run_failed_internal": "Կատարման ձախողում՝ ներքին սխալի պատճառով։",
@@ -121,18 +117,11 @@ _LOCALIZED_MESSAGES: dict[str, dict[str, str]] = {
     },
     "ru": {
         "access_denied_missing_scope": "Доступ запрещен: отсутствует scope request.",
-        "clarify_need_date_range": (
-            "Укажите диапазон дат в формате YYYY-MM-DD to YYYY-MM-DD "
-            "или относительный период (сегодня, прошлая неделя, последние 3 месяца)."
-        ),
+        "clarify_need_date_range": "Пожалуйста, уточните, какой отчет или фильтр нужно использовать.",
         "unsupported_request": (
             "Неподдерживаемый запрос. Поддерживаются аналитика продаж, источников, "
             "курьеров, клиентов, локаций, доставки, оплат, задолженности, "
             "дневных/недельных трендов и валовой прибыли."
-        ),
-        "small_talk_response": (
-            "Привет. Я могу помочь с аналитикой ресторана. "
-            "Спросите про продажи, заказы, клиентов, локации, оплаты или тренды."
         ),
         "access_denied_request": "Доступ к этому запросу запрещен.",
         "run_failed_internal": "Выполнение не удалось из-за внутренней ошибки.",
@@ -613,6 +602,10 @@ def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
     return any(term in text for term in terms)
 
 
+def _normalized_query_text(question: str) -> str:
+    return normalize_lookup_text(question) or question.lower()
+
+
 @dataclass(frozen=True)
 class QuerySlots:
     top_n: int | None = None
@@ -626,6 +619,7 @@ class QuerySlots:
 
 
 def _is_delivery_count_question(text: str) -> bool:
+    normalized_text = _normalized_query_text(text)
     if _contains_any(
         text,
         (
@@ -635,14 +629,56 @@ def _is_delivery_count_question(text: str) -> bool:
             "առաքման վճար",
             "առաքման գումար",
         ),
+    ) or _contains_any(
+        normalized_text,
+        (
+            "delivery fee",
+            "shipping fee",
+            "stoimost dostavki",
+            "araqman vjar",
+            "araqman gumar",
+        ),
     ):
         return False
-    return _contains_any(
-        text,
-        ("delivery", "deliveries", "достав", "առաք"),
-    ) and _contains_any(
-        text,
-        ("how many", "number of", "count", "сколько", "колич", "քանի"),
+    return (
+        _contains_any(
+            text,
+            ("delivery", "deliveries", "достав", "առաք"),
+        )
+        or _contains_any(
+            normalized_text,
+            ("delivery", "deliveries", "dostav", "araq", "araqum"),
+        )
+    ) and (
+        _contains_any(
+            text,
+            (
+                "how many",
+                "number of",
+                "count",
+                "quantity",
+                "total count",
+                "сколько",
+                "колич",
+                "քանի",
+                "քանակ",
+            ),
+        )
+        or _contains_any(
+            normalized_text,
+            (
+                "how many",
+                "number of",
+                "count",
+                "quantity",
+                "total count",
+                "skolko",
+                "kolich",
+                "qani",
+                "kani",
+                "qanak",
+            ),
+        )
     )
 
 
@@ -656,6 +692,19 @@ def _normalize_entity_token(value: str) -> str:
     )
     normalized = " ".join(normalized.split())
     return normalized.removesuffix("ը").strip()
+
+
+def _normalize_possessive_entity_token(value: str) -> str:
+    normalized = _normalize_entity_token(value)
+    if re.search(r"[\u0531-\u0556\u0561-\u0587]", normalized):
+        if normalized.endswith("ի") and len(normalized) > 2:
+            return normalized.removesuffix("ի").strip()
+        return normalized
+
+    for suffix in ("yi", "i", "y"):
+        if normalized.endswith(suffix) and len(normalized) > len(suffix) + 2:
+            return normalized[: -len(suffix)].strip()
+    return normalized
 
 
 def _normalize_phone_token(value: str) -> str | None:
@@ -709,6 +758,7 @@ def _extract_group_by(question: str) -> str | None:
 
 def _extract_metric(question: str) -> str | None:
     text = question.lower()
+    normalized_text = _normalized_query_text(question)
     if _contains_any(
         text,
         (
@@ -722,6 +772,18 @@ def _extract_metric(question: str) -> str | None:
             "միջին չեկ",
             "միջին պատվերի արժեք",
         ),
+    ) or _contains_any(
+        normalized_text,
+        (
+            "average check",
+            "avg check",
+            "average ticket",
+            "average order value",
+            "basket size",
+            "srednii chek",
+            "mijin chek",
+            "mijin patveri arzheq",
+        ),
     ):
         return "average_check"
     if _contains_any(
@@ -734,6 +796,16 @@ def _extract_metric(question: str) -> str | None:
             "валовая маржа",
             "համախառն շահույթ",
             "մարժա",
+        ),
+    ) or _contains_any(
+        normalized_text,
+        (
+            "gross profit",
+            "gross margin",
+            "margin",
+            "valovaia pribyl",
+            "hamakharhn shahrut",
+            "marzha",
         ),
     ):
         return "gross_profit"
@@ -755,16 +827,38 @@ def _extract_metric(question: str) -> str | None:
             "ընդհանուր վաճառ",
             "շրջանառություն",
         ),
+    ) or _contains_any(
+        normalized_text,
+        (
+            "total sales",
+            "total revenue",
+            "revenue",
+            "turnover",
+            "sales amount",
+            "obshchie prodazhi",
+            "viruchka",
+            "yndhanur vachar",
+            "shrjanarutiun",
+        ),
     ):
         return "sales_total"
     if _contains_any(
         text,
         ("collection rate", "paid vs invoiced", "собираемость", "հավաքագրման տոկոս"),
+    ) or _contains_any(
+        normalized_text,
+        ("collection rate", "paid vs invoiced", "sobiraemost", "havaqagrman tokos"),
     ):
         return "payment_collection"
-    if _contains_any(text, ("outstanding balance", "задолж", "չմարված")):
+    if _contains_any(text, ("outstanding balance", "задолж", "չմարված")) or _contains_any(
+        normalized_text,
+        ("outstanding balance", "zadolzh", "chmardz"),
+    ):
         return "outstanding_balance"
-    if _contains_any(text, ("repeat customer", "повторн", "կրկնվող հաճախ")):
+    if _contains_any(text, ("repeat customer", "повторн", "կրկնվող հաճախ")) or _contains_any(
+        normalized_text,
+        ("repeat customer", "povtorn", "krknvogh hach"),
+    ):
         return "repeat_customer_rate"
     return None
 
@@ -808,7 +902,7 @@ def _extract_source_filter(question: str) -> str | None:
 
 def _extract_courier_filter(question: str) -> str | None:
     explicit_match = re.search(
-        r"(?:courier|driver|курьер|առաքիչ)\s*(?:[:=]\s*|\s+)"
+        r"(?:courier|driver|kurier|araqich|курьер|առաքիչ)\s*(?:[:=]\s*|\s+)"
         r"([^\n,.;!?]+?)(?=\s+\d{4}-\d{2}-\d{2}\b|$|[,.!?;])",
         question,
         re.IGNORECASE,
@@ -824,6 +918,43 @@ def _extract_courier_filter(question: str) -> str | None:
     if trailing_name_match is not None:
         candidate = _normalize_entity_token(trailing_name_match.group(1))
         return candidate or None
+
+    if _is_delivery_count_question(question):
+        leading_armenian_possessive_match = re.search(
+            r"^\s*([A-Za-z\u0531-\u0556\u0561-\u0587]{2,}(?:ի|i|y))\b.*?(?:առաք|delivery|достав)",
+            question.lower(),
+        )
+        if leading_armenian_possessive_match is not None:
+            candidate = _normalize_possessive_entity_token(
+                leading_armenian_possessive_match.group(1)
+            )
+            return candidate or None
+
+    normalized_question = _normalized_query_text(question)
+    translit_leading_match = re.search(
+        r"^\s*([a-z][a-z0-9_-]{1,})\s+(?:qani|kani)\s+(?:hat\s+)?araq",
+        normalized_question,
+    )
+    if translit_leading_match is not None:
+        candidate = _normalize_entity_token(translit_leading_match.group(1))
+        return candidate or None
+
+    if _is_delivery_count_question(question):
+        translit_possessive_match = re.search(
+            r"^\s*([a-z][a-z0-9_-]{1,}(?:yi|i|y))\b.*?(?:araq|delivery|dostav)",
+            normalized_question,
+        )
+        if translit_possessive_match is not None:
+            candidate = _normalize_possessive_entity_token(translit_possessive_match.group(1))
+            return candidate or None
+
+        translit_trailing_match = re.search(
+            r"(?:arel|eghel|made|done)\s+([a-z][a-z0-9_-]{1,})\s*$",
+            normalized_question,
+        )
+        if translit_trailing_match is not None:
+            candidate = _normalize_entity_token(translit_trailing_match.group(1))
+            return candidate or None
 
     return None
 
@@ -1139,12 +1270,42 @@ def _map_slots_to_report(slots: QuerySlots) -> ReportType | None:
 
 
 def _resolve_report_ids(question: str) -> tuple[ReportType | None, list[ReportType], bool]:
-    slots = _extract_query_slots(question)
-    candidates = _detect_report_candidates(question)
+    def add_candidate(
+        report_id: ReportType,
+        *,
+        candidates: list[ReportType],
+    ) -> None:
+        if report_id not in candidates:
+            candidates.append(report_id)
+
+    segments = [
+        segment.strip(" ,.;!?")
+        for segment in re.split(
+            r"\s+(?:and|plus|also|as well as|&|և|ու|и|а также)\s+",
+            question,
+            flags=re.IGNORECASE,
+        )
+        if segment.strip(" ,.;!?")
+    ]
+
+    candidates: list[ReportType] = []
+    if len(segments) > 1:
+        for segment in segments:
+            segment_candidates = _detect_report_candidates(segment)
+            if not segment_candidates:
+                mapped = _map_slots_to_report(_extract_query_slots(segment))
+                if mapped is not None:
+                    segment_candidates = [mapped]
+            for report_id in segment_candidates:
+                add_candidate(report_id, candidates=candidates)
+
     if not candidates:
-        mapped = _map_slots_to_report(slots)
-        if mapped is not None:
-            candidates = [mapped]
+        slots = _extract_query_slots(question)
+        candidates = _detect_report_candidates(question)
+        if not candidates:
+            mapped = _map_slots_to_report(slots)
+            if mapped is not None:
+                candidates = [mapped]
 
     if not candidates:
         return None, [], False
@@ -1176,9 +1337,9 @@ def _contains_text_term(text: str, term: str) -> bool:
 
 def _is_small_talk(question: str) -> bool:
     text = question.lower()
-    if _detect_report_id(text) is not None:
+    if _detect_report_id(question) is not None:
         return False
-    if _has_explicit_or_relative_time_signal(text):
+    if _has_explicit_or_relative_time_signal(question):
         return False
 
     small_talk_terms = (
@@ -1247,6 +1408,127 @@ def _build_filters(date_from: date, date_to: date) -> ReportFilters | None:
         return ReportFilters(date_from=date_from, date_to=date_to)
     except ValueError:
         return None
+
+
+def _default_report_filters() -> ReportFilters | None:
+    settings = get_settings()
+    excel_path = settings.excel_report_file_path
+    if excel_path and excel_path.strip():
+        path = Path(excel_path)
+        if path.exists():
+            try:
+                date_from, date_to = get_excel_data_date_range(
+                    path,
+                    sheet_name=settings.excel_report_sheet_name,
+                )
+            except Exception:
+                pass
+            else:
+                return _build_filters(date_from, date_to)
+
+    date_from, date_to = get_mock_data_date_range()
+    return _build_filters(date_from, date_to)
+
+
+def _extract_relative_filters_from_normalized_text(
+    normalized_text: str,
+    *,
+    today: date,
+) -> ReportFilters | None:
+    if not normalized_text:
+        return None
+
+    def rolling_pattern(markers: tuple[str, ...], unit_pattern: str) -> str:
+        marker_pattern = "|".join(re.escape(marker) for marker in markers)
+        return rf"\b(?:{marker_pattern})\s+(?P<n>\d{{1,3}})\s+{unit_pattern}\b"
+
+    def anchored_pattern(markers: tuple[str, ...], unit_pattern: str) -> str:
+        marker_pattern = "|".join(re.escape(marker) for marker in markers)
+        return rf"\b(?:{marker_pattern})\s+{unit_pattern}\b"
+
+    today_markers = ("today", "aysor")
+    yesterday_markers = ("yesterday", "erek")
+    this_markers = ("this", "current", "ays", "es")
+    last_markers = ("last", "previous", "nakhord", "ancats")
+    rolling_markers = ("last", "past", "verjin")
+
+    day_unit = r"(?:days?|or[a-z]*)"
+    week_unit = r"(?:weeks?|shabat[a-z]*)"
+    month_unit = r"(?:months?|am(?:is|s)[a-z]*)"
+    quarter_unit = r"(?:quarters?|eramsyak[a-z]*)"
+    year_unit = r"(?:years?|tar(?:i|va)[a-z]*)"
+
+    for pattern, duration_builder in (
+        (
+            rolling_pattern(rolling_markers, day_unit),
+            lambda count: _build_filters(today - timedelta(days=count - 1), today),
+        ),
+        (
+            rolling_pattern(rolling_markers, week_unit),
+            lambda count: _build_filters(today - timedelta(days=7 * count - 1), today),
+        ),
+        (
+            rolling_pattern(rolling_markers, month_unit),
+            lambda count: _build_filters(
+                _shift_month_start(_first_day_of_month(today), -(count - 1)),
+                today,
+            ),
+        ),
+        (
+            rolling_pattern(rolling_markers, year_unit),
+            lambda count: _build_filters(date(today.year - (count - 1), 1, 1), today),
+        ),
+    ):
+        match = re.search(pattern, normalized_text)
+        if match is None:
+            continue
+        count = int(match.group("n"))
+        if count <= 0:
+            return None
+        return duration_builder(count)
+
+    if any(_contains_text_term(normalized_text, marker) for marker in today_markers):
+        return _build_filters(today, today)
+    if any(_contains_text_term(normalized_text, marker) for marker in yesterday_markers):
+        previous_day = today - timedelta(days=1)
+        return _build_filters(previous_day, previous_day)
+
+    if re.search(anchored_pattern(this_markers, week_unit), normalized_text):
+        this_week_start = today - timedelta(days=today.weekday())
+        return _build_filters(this_week_start, today)
+    if re.search(anchored_pattern(last_markers, week_unit), normalized_text):
+        this_week_start = today - timedelta(days=today.weekday())
+        last_week_end = this_week_start - timedelta(days=1)
+        last_week_start = last_week_end - timedelta(days=6)
+        return _build_filters(last_week_start, last_week_end)
+
+    if re.search(anchored_pattern(this_markers, month_unit), normalized_text):
+        return _build_filters(_first_day_of_month(today), today)
+    if re.search(anchored_pattern(last_markers, month_unit), normalized_text):
+        this_month_start = _first_day_of_month(today)
+        last_month_end = this_month_start - timedelta(days=1)
+        last_month_start = _first_day_of_month(last_month_end)
+        return _build_filters(last_month_start, last_month_end)
+
+    if re.search(anchored_pattern(this_markers, quarter_unit), normalized_text):
+        return _build_filters(_quarter_start(today), today)
+    if re.search(anchored_pattern(last_markers, quarter_unit), normalized_text):
+        quarter_start, quarter_end = _previous_quarter_range(today)
+        return _build_filters(quarter_start, quarter_end)
+
+    if re.search(anchored_pattern(this_markers, year_unit), normalized_text):
+        return _build_filters(date(today.year, 1, 1), today)
+    if re.search(anchored_pattern(last_markers, year_unit), normalized_text):
+        return _build_filters(date(today.year - 1, 1, 1), date(today.year - 1, 12, 31))
+
+    if (
+        "all time" in normalized_text
+        or "entire history" in normalized_text
+        or re.search(r"\b(?:bolor|amboxj)\s+(?:jamanak|patmut[a-z]*)\b", normalized_text)
+    ):
+        return _default_report_filters()
+
+    return None
 
 
 def _extract_relative_filters(question: str, *, today: date) -> ReportFilters | None:
@@ -1428,10 +1710,15 @@ def _extract_relative_filters(question: str, *, today: date) -> ReportFilters | 
     ):
         return _build_filters(date(today.year - 1, 1, 1), date(today.year - 1, 12, 31))
 
-    return None
+    normalized_text = normalize_lookup_text(question) or ""
+    return _extract_relative_filters_from_normalized_text(normalized_text, today=today)
 
 
-def _extract_filters(question: str) -> ReportFilters | None:
+def _extract_filters(
+    question: str,
+    *,
+    default_to_all_time: bool = True,
+) -> ReportFilters | None:
     match = _DATE_RANGE_PATTERN.search(question)
     if match is not None:
         try:
@@ -1441,7 +1728,12 @@ def _extract_filters(question: str) -> ReportFilters | None:
         except ValueError:
             return None
 
-    return _extract_relative_filters(question, today=_today())
+    relative_filters = _extract_relative_filters(question, today=_today())
+    if relative_filters is not None:
+        return relative_filters
+    if default_to_all_time:
+        return _default_report_filters()
+    return None
 
 
 def _generate_interpretation_payload(question: str) -> dict[str, Any]:
@@ -1472,20 +1764,20 @@ def _generate_interpretation_payload(question: str) -> dict[str, Any]:
             ),
         }
 
+    explicit_date_range = _DATE_RANGE_PATTERN.search(question) is not None
     filters = _extract_filters(question)
-    if filters is None:
+    if filters is None and explicit_date_range:
         return {
             "intent": IntentType.NEEDS_CLARIFICATION,
             "report_id": selected_report_id,
             "filters": None,
             "needs_clarification": True,
-            "clarification_question": (
-                "Please provide a date range (YYYY-MM-DD to YYYY-MM-DD) "
-                "or a relative period like today / last week / last 3 months."
-            ),
-            "confidence": 0.7,
-            "reasoning_notes": "Report candidate detected but required date range is missing.",
+            "clarification_question": "Please provide a valid date range using YYYY-MM-DD to YYYY-MM-DD.",
+            "confidence": 0.55,
+            "reasoning_notes": "An explicit date range was present but could not be parsed safely.",
         }
+    if filters is None:
+        filters = _default_report_filters()
 
     filter_updates: dict[str, str] = {}
     if slots.source:
@@ -1507,18 +1799,24 @@ def _generate_interpretation_payload(question: str) -> dict[str, Any]:
         if selected_report_id in _BREAKDOWN_REPORT_IDS
         else IntentType.GET_KPI
     )
+    used_all_time_default = not _has_explicit_or_relative_time_signal(question)
     return {
         "intent": intent,
         "report_id": selected_report_id,
         "filters": filters,
         "needs_clarification": False,
         "clarification_question": None,
-        "confidence": 0.9,
+        "confidence": 0.82 if used_all_time_default else 0.9,
         "reasoning_notes": (
-            "Report and filters identified with deterministic slot extraction: "
-            f"group_by={slots.group_by}, metric={slots.metric}, entity={slots.entity}, "
-            f"top_n={slots.top_n}, source={slots.source}, courier={slots.courier}, "
-            f"location={slots.location}, phone_number={slots.phone_number}."
+            (
+                "Report identified with deterministic slot extraction and all-time default "
+                "date range: "
+                if used_all_time_default
+                else "Report and filters identified with deterministic slot extraction: "
+            )
+            + f"group_by={slots.group_by}, metric={slots.metric}, entity={slots.entity}, "
+            + f"top_n={slots.top_n}, source={slots.source}, courier={slots.courier}, "
+            + f"location={slots.location}, phone_number={slots.phone_number}."
         ),
     }
 
@@ -1551,7 +1849,7 @@ def _interpret_request_with_llm(
     question: str,
     llm_client: Any,
 ) -> dict[str, Any]:
-    messages = build_interpret_request_messages(question)
+    messages = build_interpret_request_messages(question, current_date=_today())
     output_text = llm_client.generate_text(messages=messages)
     interpretation = parse_interpretation_output_json(output_text)
     return interpretation.model_dump(mode="python")
@@ -2007,6 +2305,65 @@ def _select_next_after_reasoning(state: AgentState) -> str:
     return "compose_output"
 
 
+def _small_talk_fallback_response(state: AgentState) -> str:
+    language = _response_language(state.user_question)
+    normalized_question = normalize_lookup_text(state.user_question) or ""
+    capability_text = _join_human_list(
+        state,
+        [
+            _localized_report_name(state, ReportType.SALES_TOTAL),
+            _localized_report_name(state, ReportType.ORDER_COUNT),
+            _localized_report_name(state, ReportType.TOP_CUSTOMERS),
+            _localized_report_name(state, ReportType.PAYMENT_COLLECTION),
+            _localized_report_name(state, ReportType.DAILY_SALES_TREND),
+        ],
+    )
+
+    if any(
+        _contains_text_term(normalized_question, term)
+        for term in ("thanks", "thank you", "thx", "spasibo", "shnorhakal", "shnorhakalutyun")
+    ):
+        if language == "hy":
+            return f"Խնդրեմ։ Կարող եմ օգնել նաև {capability_text} հարցերով։"
+        if language == "ru":
+            return f"Пожалуйста. Я также могу помочь с аналитикой по темам: {capability_text}."
+        return f"You're welcome. I can also help with restaurant analytics such as {capability_text}."
+
+    if any(
+        _contains_text_term(normalized_question, term)
+        for term in ("how are you", "inchpes es", "vonc es", "kak dela")
+    ):
+        if language == "hy":
+            return f"Լավ եմ, պատրաստ եմ օգնելու։ Կարող եք հարցնել {capability_text} մասին։"
+        if language == "ru":
+            return f"Все в порядке, готов помочь. Можете спросить про {capability_text}."
+        return f"I'm ready to help. You can ask about {capability_text}."
+
+    if language == "hy":
+        return f"Բարև։ Կարող եմ օգնել {capability_text} վերաբերյալ վերլուծություններով։"
+    if language == "ru":
+        return f"Здравствуйте. Я могу помочь с аналитикой по темам: {capability_text}."
+    return f"Hi. I can help with restaurant analytics such as {capability_text}."
+
+
+def _generate_small_talk_response(state: AgentState) -> tuple[str, list[str]]:
+    try:
+        llm_client = get_llm_client()
+    except ValueError:
+        return _small_talk_fallback_response(state), state.warnings
+
+    try:
+        response = llm_client.generate_text(
+            messages=build_small_talk_messages(state.user_question)
+        ).strip()
+    except LLMClientError:
+        return _small_talk_fallback_response(state), [*state.warnings, "small_talk_llm_fallback"]
+
+    if not response:
+        return _small_talk_fallback_response(state), [*state.warnings, "small_talk_llm_empty"]
+    return response, state.warnings
+
+
 def _clarify_node(state: AgentState) -> dict[str, Any]:
     question = _localized_clarification_question(state)
     return {
@@ -2018,9 +2375,11 @@ def _clarify_node(state: AgentState) -> dict[str, Any]:
 
 
 def _small_talk_node(state: AgentState) -> dict[str, Any]:
+    final_answer, warnings = _generate_small_talk_response(state)
     return {
         "status": RunStatus.COMPLETED,
-        "final_answer": _localized_message(state, "small_talk_response"),
+        "final_answer": final_answer,
+        "warnings": warnings,
     }
 
 
@@ -2232,7 +2591,7 @@ def _compose_output_node(state: AgentState) -> dict[str, Any]:
         report_id=run_response.result.report_id,
         filters=run_response.result.filters,
         metrics=run_response.result.metrics,
-        include_derived=True,
+        include_derived=False,
     )
     if not state.additional_run_reports:
         final_answer = primary_summary

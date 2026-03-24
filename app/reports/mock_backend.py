@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, time, timezone
+from datetime import date, datetime, time, timezone
 
 from app.reports.filter_resolution import normalize_phone_value, resolve_filter_value_from_catalog
 from app.schemas.reports import (
@@ -81,12 +81,25 @@ _DAILY_ORDER_METRICS: dict[str, float] = {
     "2026-03-07": 55.0,
 }
 
+_MOCK_DATA_DATES = tuple(
+    sorted(
+        {
+            *(date.fromisoformat(day) for day in _DAILY_SALES_METRICS),
+            *(date.fromisoformat(day) for day in _DAILY_ORDER_METRICS),
+        }
+    )
+)
+
 _FILTER_CATALOGS: dict[str, dict[str, float]] = {
     "source": _SOURCE_METRICS,
     "courier": _COURIER_METRICS,
     "location": _LOCATION_METRICS,
     "phone_number": _CUSTOMER_METRICS,
 }
+
+
+def get_mock_data_date_range() -> tuple[date, date]:
+    return (_MOCK_DATA_DATES[0], _MOCK_DATA_DATES[-1])
 
 
 def _generated_at(filters: ReportFilters) -> datetime:

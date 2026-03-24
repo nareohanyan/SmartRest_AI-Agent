@@ -90,15 +90,16 @@ async def test_supported_request_returns_completed_contract(api_client: AsyncCli
     assert payload["clarification_question"] is None
 
 
-async def test_missing_date_returns_clarify_response(api_client: AsyncClient) -> None:
+async def test_missing_date_defaults_to_all_time_response(api_client: AsyncClient) -> None:
     response = await api_client.post("/agent/run", json=_request_payload("What were total sales?"))
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "clarify"
-    assert payload["needs_clarification"] is True
-    assert payload["clarification_question"]
-    assert "date range" in payload["clarification_question"].lower()
+    assert payload["status"] == "completed"
+    assert payload["needs_clarification"] is False
+    assert payload["clarification_question"] is None
+    assert payload["applied_filters"]["date_from"] == "2026-03-01"
+    assert payload["applied_filters"]["date_to"] == "2026-03-07"
 
 
 async def test_unsupported_request_returns_rejected_status(api_client: AsyncClient) -> None:

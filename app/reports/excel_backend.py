@@ -312,6 +312,18 @@ def load_excel_orders(
         workbook.close()
 
 
+def get_excel_data_date_range(
+    file_path: str | Path,
+    *,
+    sheet_name: str | None = None,
+) -> tuple[date, date]:
+    rows = load_excel_orders(file_path, sheet_name=sheet_name)
+    if not rows:
+        raise ValueError("Excel file contains no data rows.")
+    dates = [row.order_date for row in rows]
+    return (min(dates), max(dates))
+
+
 def _generated_at(filters: ReportFilters) -> datetime:
     return datetime.combine(filters.date_to, time.min, tzinfo=timezone.utc)
 

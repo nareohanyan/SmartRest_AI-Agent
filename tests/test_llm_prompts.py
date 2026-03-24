@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from app.agent.llm.prompts import (
     InterpretationContractError,
     build_interpret_request_messages,
+    build_small_talk_messages,
     parse_interpretation_output_json,
     validate_interpretation_output,
 )
@@ -33,6 +36,25 @@ def test_build_interpret_request_messages_adds_russian_language_policy() -> None
 
     assert messages[0]["role"] == "system"
     assert 'The user question language is "Russian".' in messages[0]["content"]
+
+
+def test_build_interpret_request_messages_adds_current_date_policy() -> None:
+    messages = build_interpret_request_messages(
+        "What were total sales yesterday?",
+        current_date=date(2026, 3, 23),
+    )
+
+    assert "Current date is 2026-03-23." in messages[0]["content"]
+    assert "treat it as an all-time request" in messages[0]["content"]
+
+
+def test_build_small_talk_messages_returns_system_and_user_entries() -> None:
+    messages = build_small_talk_messages("Hello there")
+
+    assert len(messages) == 2
+    assert messages[0]["role"] == "system"
+    assert 'prefer "English"' in messages[0]["content"]
+    assert messages[1] == {"role": "user", "content": "Hello there"}
 
 
 def test_validate_interpretation_output_accepts_valid_supported_payload() -> None:

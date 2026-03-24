@@ -100,6 +100,8 @@ _CYRILLIC_TO_LATIN = {
 }
 
 _MAX_CANDIDATES = 5
+_AUTO_RESOLVE_TEXT_SCORE_THRESHOLD = 7.0
+_AUTO_RESOLVE_TEXT_SCORE_MARGIN = 2.0
 
 
 def supported_filter_keys(report_id: ReportType) -> frozenset[ReportFilterKey]:
@@ -120,14 +122,21 @@ def normalize_phone_value(value: str | None) -> str | None:
 def _latinize_text(value: str) -> str:
     lowered = value.lower()
     buffer: list[str] = []
-    for char in lowered:
+    index = 0
+    while index < len(lowered):
+        if lowered[index : index + 2] == "ու":
+            buffer.append("u")
+            index += 2
+            continue
+
+        char = lowered[index]
         if char in _ARMENIAN_TO_LATIN:
             buffer.append(_ARMENIAN_TO_LATIN[char])
-            continue
-        if char in _CYRILLIC_TO_LATIN:
+        elif char in _CYRILLIC_TO_LATIN:
             buffer.append(_CYRILLIC_TO_LATIN[char])
-            continue
-        buffer.append(char)
+        else:
+            buffer.append(char)
+        index += 1
     return "".join(buffer)
 
 
@@ -281,6 +290,19 @@ def resolve_filter_value_from_catalog(
         ),
         key=lambda item: (-item[0], item[1].lower()),
     )
+
+    if filter_key in {ReportFilterKey.COURIER, ReportFilterKey.SOURCE} and ranked_candidates:
+        top_score, top_candidate = ranked_candidates[0]
+        next_score = ranked_candidates[1][0] if len(ranked_candidates) > 1 else 0.0
+        if top_score >= _AUTO_RESOLVE_TEXT_SCORE_THRESHOLD and (
+            next_score < 4.0 or (top_score - next_score) >= _AUTO_RESOLVE_TEXT_SCORE_MARGIN
+        ):
+            return ResolveFilterValueResponse(
+                status=ResolveFilterValueStatus.RESOLVED,
+                matched_value=top_candidate,
+                candidates=[],
+            )
+
     candidates = [
         candidate
         for score, candidate in ranked_candidates
