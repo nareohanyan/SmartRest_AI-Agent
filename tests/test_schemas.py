@@ -223,6 +223,15 @@ def test_resolve_scope_contracts_valid_and_invalid() -> None:
 
     assert scope_request.user_id == 1
     assert scope_response.status is AccessStatus.GRANTED
+    assert scope_response.allowed_metric_ids == [
+        MetricName.SALES_TOTAL.value,
+        MetricName.ORDER_COUNT.value,
+        MetricName.AVERAGE_CHECK.value,
+    ]
+    assert scope_response.allowed_dimension_ids == [
+        DimensionName.SOURCE.value,
+        DimensionName.DAY.value,
+    ]
     assert scope_response.allowed_metrics == list(MetricName)
     assert scope_response.allowed_dimensions == list(DimensionName)
     assert scope_response.allowed_tool_operations == list(ToolOperation)
@@ -259,10 +268,29 @@ def test_resolve_scope_accepts_explicit_granular_permissions() -> None:
 
     assert scope_response.allowed_metrics == [MetricName.SALES_TOTAL]
     assert scope_response.allowed_dimensions == [DimensionName.SOURCE]
+    assert scope_response.allowed_metric_ids == [MetricName.SALES_TOTAL.value]
+    assert scope_response.allowed_dimension_ids == [DimensionName.SOURCE.value]
     assert scope_response.allowed_tool_operations == [
         ToolOperation.FETCH_BREAKDOWN,
         ToolOperation.TOP_K,
     ]
+
+
+def test_resolve_scope_accepts_id_permissions_outside_legacy_enums() -> None:
+    scope_response = ResolveScopeResponse.model_validate(
+        {
+            "status": "granted",
+            "allowed_report_ids": ["sales_total"],
+            "allowed_metric_ids": ["sales_total", "completed_order_count"],
+            "allowed_dimension_ids": ["source", "branch"],
+            "allowed_tool_operations": ["fetch_breakdown"],
+        }
+    )
+
+    assert scope_response.allowed_metric_ids == ["sales_total", "completed_order_count"]
+    assert scope_response.allowed_dimension_ids == ["source", "branch"]
+    assert scope_response.allowed_metrics == [MetricName.SALES_TOTAL]
+    assert scope_response.allowed_dimensions == [DimensionName.SOURCE]
 
 
 def test_list_reports_contracts_valid_and_invalid() -> None:

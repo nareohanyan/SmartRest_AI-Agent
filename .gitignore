@@ -6,7 +6,7 @@ codex_prompt.md
 TODO.md
 guide.md
 improvements.md
-
+smartrest_metric_registry_blueprint.json
 # Local environment
 .venv/
 .env

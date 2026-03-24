@@ -47,6 +47,17 @@ def _parse_enum_csv(
     return [enum_type(token) for token in tokens]
 
 
+def _parse_csv(
+    *,
+    metadata: dict[str, str],
+    key: str,
+) -> list[str] | None:
+    raw_value = metadata.get(key)
+    if raw_value is None:
+        return None
+    return [token.strip() for token in raw_value.split(_CSV_SEPARATOR) if token.strip()]
+
+
 def resolve_scope_tool(request: ResolveScopeRequest) -> ResolveScopeResponse:
     """Resolve access scope deterministically from identity and optional metadata."""
     if request.metadata.get("access") == "deny":
@@ -59,6 +70,14 @@ def resolve_scope_tool(request: ResolveScopeRequest) -> ResolveScopeResponse:
     return ResolveScopeResponse(
         status=AccessStatus.GRANTED,
         allowed_report_ids=list(REPORT_CATALOG_ORDER),
+        allowed_metric_ids=(
+            _parse_csv(metadata=request.metadata, key="allow_metric_ids")
+            or _parse_csv(metadata=request.metadata, key="allow_metrics")
+        ),
+        allowed_dimension_ids=(
+            _parse_csv(metadata=request.metadata, key="allow_dimension_ids")
+            or _parse_csv(metadata=request.metadata, key="allow_dimensions")
+        ),
         allowed_metrics=_parse_enum_csv(
             metadata=request.metadata,
             key="allow_metrics",

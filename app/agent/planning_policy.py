@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from app.agent.planner_constraints import evaluate_planner_constraints
 from app.core.config import Settings
 from app.schemas.agent import PolicyRoute
 from app.schemas.analysis import (
@@ -63,20 +64,36 @@ def _estimated_tool_calls(intent: AnalysisIntent) -> int:
 
 def _missing_metric_permissions(
     *,
-    required_metrics: list[MetricName],
+    required_metric_ids: list[str],
     scope: ResolveScopeResponse,
-) -> list[MetricName]:
-    allowed_metrics = scope.allowed_metrics or []
-    return [metric for metric in required_metrics if metric not in allowed_metrics]
+) -> list[str]:
+    allowed_metric_ids = _scope_metric_ids(scope)
+    return [metric_id for metric_id in required_metric_ids if metric_id not in allowed_metric_ids]
 
 
 def _missing_dimension_permissions(
     *,
-    required_dimensions: list[DimensionName],
+    required_dimension_ids: list[str],
     scope: ResolveScopeResponse,
-) -> list[DimensionName]:
-    allowed_dimensions = scope.allowed_dimensions or []
-    return [dimension for dimension in required_dimensions if dimension not in allowed_dimensions]
+) -> list[str]:
+    allowed_dimension_ids = _scope_dimension_ids(scope)
+    return [
+        dimension_id
+        for dimension_id in required_dimension_ids
+        if dimension_id not in allowed_dimension_ids
+    ]
+
+
+def _scope_metric_ids(scope: ResolveScopeResponse) -> set[str]:
+    if scope.allowed_metric_ids is not None:
+        return set(scope.allowed_metric_ids)
+    return {metric.value for metric in (scope.allowed_metrics or [])}
+
+
+def _scope_dimension_ids(scope: ResolveScopeResponse) -> set[str]:
+    if scope.allowed_dimension_ids is not None:
+        return set(scope.allowed_dimension_ids)
+    return {dimension.value for dimension in (scope.allowed_dimensions or [])}
 
 
 def _missing_tool_permissions(
@@ -88,20 +105,20 @@ def _missing_tool_permissions(
     return [tool for tool in required_tools if tool not in allowed_tools]
 
 
-def _reject_missing_metric(metric: MetricName) -> PolicyDecision:
+def _reject_missing_metric(metric_id: str) -> PolicyDecision:
     return PolicyDecision(
         route=PolicyRoute.REJECT,
         reason_code="metric_not_allowed",
-        reason_message=f"Metric `{metric.value}` is not allowed for this scope.",
+        reason_message=f"Metric `{metric_id}` is not allowed for this scope.",
         allowed=False,
     )
 
 
-def _reject_missing_dimension(dimension: DimensionName) -> PolicyDecision:
+def _reject_missing_dimension(dimension_id: str) -> PolicyDecision:
     return PolicyDecision(
         route=PolicyRoute.REJECT,
         reason_code="dimension_not_allowed",
-        reason_message=f"Dimension `{dimension.value}` is not allowed for this scope.",
+        reason_message=f"Dimension `{dimension_id}` is not allowed for this scope.",
         allowed=False,
     )
 
@@ -203,6 +220,38 @@ def evaluate_plan_policy(
             allowed=False,
         )
 
+    planner_constraints = evaluate_planner_constraints(
+        plan_intent=plan_intent,
+        retrieval_metric=retrieval_metric,
+        previous_period_metric=previous_period_metric,
+        retrieval_dimension=retrieval_dimension,
+        ranking_mode=ranking_mode,
+        include_moving_average=include_moving_average,
+        include_trend_slope=include_trend_slope,
+        has_scalar_calculations=has_scalar_calculations,
+    )
+    if not planner_constraints.allowed:
+        return PolicyDecision(
+            route=PolicyRoute.REJECT,
+            reason_code=planner_constraints.reason_code,
+            reason_message=planner_constraints.reason_message,
+            allowed=False,
+        )
+
+    missing_metric_ids = _missing_metric_permissions(
+        required_metric_ids=list(planner_constraints.required_metric_ids),
+        scope=scope,
+    )
+    if missing_metric_ids:
+        return _reject_missing_metric(missing_metric_ids[0])
+
+    missing_dimension_ids = _missing_dimension_permissions(
+        required_dimension_ids=list(planner_constraints.required_dimension_ids),
+        scope=scope,
+    )
+    if missing_dimension_ids:
+        return _reject_missing_dimension(missing_dimension_ids[0])
+
     if plan_intent in {AnalysisIntent.METRIC_TOTAL, AnalysisIntent.BREAKDOWN}:
         mapped_report_id = _map_retrieval_to_report(
             mode=retrieval_mode,
@@ -240,19 +289,7 @@ def evaluate_plan_policy(
                 reason_message="Comparison requires total retrieval mode.",
                 allowed=False,
             )
-        required_metrics = [retrieval_metric]
-        if compare_to_previous_period and previous_period_metric is not None:
-            required_metrics.append(previous_period_metric)
-        missing_metrics = _missing_metric_permissions(
-            required_metrics=[metric for metric in required_metrics if metric is not None],
-            scope=scope,
-        )
-        if missing_metrics:
-            return _reject_missing_metric(missing_metrics[0])
-
-        required_tools = [ToolOperation.FETCH_TOTAL_METRIC]
-        if has_scalar_calculations:
-            required_tools.append(ToolOperation.COMPUTE_SCALAR_METRICS)
+        required_tools = list(planner_constraints.required_runtime_operations)
         missing_tools = _missing_tool_permissions(required_tools=required_tools, scope=scope)
         if missing_tools:
             return _reject_missing_tool(missing_tools[0])
@@ -274,25 +311,7 @@ def evaluate_plan_policy(
                 reason_message="Ranking requires source breakdown retrieval.",
                 allowed=False,
             )
-        missing_metrics = _missing_metric_permissions(
-            required_metrics=[retrieval_metric] if retrieval_metric is not None else [],
-            scope=scope,
-        )
-        if missing_metrics:
-            return _reject_missing_metric(missing_metrics[0])
-
-        missing_dimensions = _missing_dimension_permissions(
-            required_dimensions=[DimensionName.SOURCE],
-            scope=scope,
-        )
-        if missing_dimensions:
-            return _reject_missing_dimension(missing_dimensions[0])
-
-        required_tools = [ToolOperation.FETCH_BREAKDOWN, ToolOperation.ATTACH_BREAKDOWN_SHARE]
-        if ranking_mode is RankingMode.TOP_K:
-            required_tools.append(ToolOperation.TOP_K)
-        if ranking_mode is RankingMode.BOTTOM_K:
-            required_tools.append(ToolOperation.BOTTOM_K)
+        required_tools = list(planner_constraints.required_runtime_operations)
         missing_tools = _missing_tool_permissions(required_tools=required_tools, scope=scope)
         if missing_tools:
             return _reject_missing_tool(missing_tools[0])
@@ -311,25 +330,7 @@ def evaluate_plan_policy(
                 reason_message="Trend requires timeseries retrieval mode.",
                 allowed=False,
             )
-        missing_metrics = _missing_metric_permissions(
-            required_metrics=[retrieval_metric] if retrieval_metric is not None else [],
-            scope=scope,
-        )
-        if missing_metrics:
-            return _reject_missing_metric(missing_metrics[0])
-
-        missing_dimensions = _missing_dimension_permissions(
-            required_dimensions=[DimensionName.DAY],
-            scope=scope,
-        )
-        if missing_dimensions:
-            return _reject_missing_dimension(missing_dimensions[0])
-
-        required_tools = [ToolOperation.FETCH_TIMESERIES]
-        if include_moving_average:
-            required_tools.append(ToolOperation.MOVING_AVERAGE)
-        if include_trend_slope:
-            required_tools.append(ToolOperation.TREND_SLOPE)
+        required_tools = list(planner_constraints.required_runtime_operations)
         missing_tools = _missing_tool_permissions(required_tools=required_tools, scope=scope)
         if missing_tools:
             return _reject_missing_tool(missing_tools[0])

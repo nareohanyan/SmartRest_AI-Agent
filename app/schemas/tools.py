@@ -38,6 +38,8 @@ class ResolveScopeRequest(SchemaModel):
 class ResolveScopeResponse(SchemaModel):
     status: AccessStatus
     allowed_report_ids: list[ReportType]
+    allowed_metric_ids: list[str] | None = None
+    allowed_dimension_ids: list[str] | None = None
     allowed_metrics: list[MetricName] | None = None
     allowed_dimensions: list[DimensionName] | None = None
     allowed_tool_operations: list[ToolOperation] | None = None
@@ -52,10 +54,35 @@ class ResolveScopeResponse(SchemaModel):
             raise ValueError("denial_reason must be null when status is granted")
 
         if self.status is AccessStatus.GRANTED:
+            if self.allowed_metric_ids is None:
+                if self.allowed_metrics is not None:
+                    self.allowed_metric_ids = [metric.value for metric in self.allowed_metrics]
+                else:
+                    self.allowed_metric_ids = [metric.value for metric in MetricName]
+            if self.allowed_dimension_ids is None:
+                if self.allowed_dimensions is not None:
+                    self.allowed_dimension_ids = [
+                        dimension.value for dimension in self.allowed_dimensions
+                    ]
+                else:
+                    self.allowed_dimension_ids = [
+                        dimension.value for dimension in DimensionName
+                    ]
+
             if self.allowed_metrics is None:
-                self.allowed_metrics = list(MetricName)
+                self.allowed_metrics = []
+                for metric_id in self.allowed_metric_ids:
+                    try:
+                        self.allowed_metrics.append(MetricName(metric_id))
+                    except ValueError:
+                        continue
             if self.allowed_dimensions is None:
-                self.allowed_dimensions = list(DimensionName)
+                self.allowed_dimensions = []
+                for dimension_id in self.allowed_dimension_ids:
+                    try:
+                        self.allowed_dimensions.append(DimensionName(dimension_id))
+                    except ValueError:
+                        continue
             if self.allowed_tool_operations is None:
                 self.allowed_tool_operations = list(ToolOperation)
 

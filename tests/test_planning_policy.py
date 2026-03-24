@@ -28,6 +28,8 @@ def _settings(**overrides: object) -> SimpleNamespace:
 
 def _granted_scope(
     *allowed: ReportType,
+    allowed_metric_ids: list[str] | None = None,
+    allowed_dimension_ids: list[str] | None = None,
     allowed_metrics: list[MetricName] | None = None,
     allowed_dimensions: list[DimensionName] | None = None,
     allowed_tool_operations: list[ToolOperation] | None = None,
@@ -35,6 +37,8 @@ def _granted_scope(
     return ResolveScopeResponse(
         status=AccessStatus.GRANTED,
         allowed_report_ids=list(allowed),
+        allowed_metric_ids=allowed_metric_ids,
+        allowed_dimension_ids=allowed_dimension_ids,
         allowed_metrics=allowed_metrics,
         allowed_dimensions=allowed_dimensions,
         allowed_tool_operations=allowed_tool_operations,
@@ -145,6 +149,26 @@ def test_policy_rejects_ranking_without_source_breakdown() -> None:
 
     assert decision.route is PolicyRoute.REJECT
     assert decision.reason_code == "unsupported_retrieval_mode"
+
+
+def test_policy_rejects_when_metric_id_permission_is_missing() -> None:
+    decision = evaluate_plan_policy(
+        plan_intent=AnalysisIntent.METRIC_TOTAL,
+        retrieval_mode=RetrievalMode.TOTAL,
+        retrieval_metric=MetricName.SALES_TOTAL,
+        retrieval_dimension=None,
+        date_from=date(2026, 3, 1),
+        date_to=date(2026, 3, 7),
+        scope=_granted_scope(
+            ReportType.SALES_TOTAL,
+            allowed_metric_ids=[MetricName.ORDER_COUNT.value],
+        ),
+        settings=_settings(),
+    )
+
+    assert decision.route is PolicyRoute.REJECT
+    assert decision.reason_code == "metric_not_allowed"
+    assert decision.allowed is False
 
 
 def test_policy_rejects_comparison_when_tool_permission_is_missing() -> None:

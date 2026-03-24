@@ -657,7 +657,7 @@ def test_smalltalk_stays_deterministic_even_when_llm_is_available(
                 "clarification_question": None,
                 "reasoning_notes": "Ranking contract test.",
             },
-            {"allowed_dimensions": [DimensionName.DAY]},
+            {"allowed_dimension_ids": [DimensionName.DAY.value]},
             "dimension_not_allowed",
         ),
         (
@@ -681,7 +681,7 @@ def test_smalltalk_stays_deterministic_even_when_llm_is_available(
                 "clarification_question": None,
                 "reasoning_notes": "Trend contract test.",
             },
-            {"allowed_metrics": [MetricName.ORDER_COUNT]},
+            {"allowed_metric_ids": [MetricName.ORDER_COUNT.value]},
             "metric_not_allowed",
         ),
     ],

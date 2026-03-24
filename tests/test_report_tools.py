@@ -41,6 +41,8 @@ def test_resolve_scope_granted_returns_all_reports() -> None:
     assert response.status is AccessStatus.GRANTED
     assert response.denial_reason is None
     assert response.allowed_report_ids == list(REPORT_CATALOG_ORDER)
+    assert response.allowed_metric_ids == [metric.value for metric in MetricName]
+    assert response.allowed_dimension_ids == [dimension.value for dimension in DimensionName]
     assert response.allowed_metrics == list(MetricName)
     assert response.allowed_dimensions == list(DimensionName)
     assert response.allowed_tool_operations == list(ToolOperation)
@@ -72,12 +74,38 @@ def test_resolve_scope_parses_granular_permissions_from_metadata() -> None:
 
     response = resolve_scope_tool(request)
 
+    assert response.allowed_metric_ids == [
+        MetricName.SALES_TOTAL.value,
+        MetricName.ORDER_COUNT.value,
+    ]
+    assert response.allowed_dimension_ids == [DimensionName.SOURCE.value]
     assert response.allowed_metrics == [MetricName.SALES_TOTAL, MetricName.ORDER_COUNT]
     assert response.allowed_dimensions == [DimensionName.SOURCE]
     assert response.allowed_tool_operations == [
         ToolOperation.FETCH_BREAKDOWN,
         ToolOperation.TOP_K,
     ]
+
+
+def test_resolve_scope_parses_id_level_permissions_from_metadata() -> None:
+    request = ResolveScopeRequest.model_validate(
+        {
+            **_identity_payload(),
+            "metadata": {
+                "allow_metric_ids": "sales_total,completed_order_count",
+                "allow_dimension_ids": "source,branch",
+                "allow_tool_operations": "fetch_total_metric",
+            },
+        }
+    )
+
+    response = resolve_scope_tool(request)
+
+    assert response.allowed_metric_ids == ["sales_total", "completed_order_count"]
+    assert response.allowed_dimension_ids == ["source", "branch"]
+    assert response.allowed_metrics == [MetricName.SALES_TOTAL]
+    assert response.allowed_dimensions == [DimensionName.SOURCE]
+    assert response.allowed_tool_operations == [ToolOperation.FETCH_TOTAL_METRIC]
 
 
 def test_list_reports_respects_allowed_ids_and_stable_catalog_order() -> None:
