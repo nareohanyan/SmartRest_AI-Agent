@@ -12,8 +12,11 @@ import pytest
 import app.agent.graph as graph_module
 from app.agent.graph import build_agent_graph
 from app.agent.llm.exceptions import LLMClientError
+from app.agent.tool_registry import ToolId
 from app.schemas.agent import AgentState, LLMErrorCategory, RunStatus
+from app.schemas.analysis import DimensionName, MetricName
 from app.schemas.reports import ReportType
+from app.schemas.tools import ToolOperation
 
 
 class _FakeLLMClient:
@@ -34,6 +37,36 @@ class _FakeLLMClient:
         if self._output_text is None:
             raise AssertionError("No fake LLM output configured.")
         return self._output_text
+
+
+class _ScopeOverrideRegistry:
+    _DYNAMIC_TOOL_IDS = {
+        ToolId.FETCH_TOTAL_METRIC,
+        ToolId.FETCH_BREAKDOWN,
+        ToolId.FETCH_TIMESERIES,
+        ToolId.ATTACH_BREAKDOWN_SHARE,
+        ToolId.TOP_K,
+        ToolId.BOTTOM_K,
+        ToolId.MOVING_AVERAGE,
+        ToolId.TREND_SLOPE,
+    }
+
+    def __init__(self, *, scope_overrides: dict[str, object]) -> None:
+        self._base = graph_module.get_tool_registry()
+        self._scope_overrides = scope_overrides
+        self.calls: list[str] = []
+
+    def invoke(self, tool_id: ToolId | str, request: Any) -> Any:
+        normalized_tool_id = ToolId(tool_id)
+        self.calls.append(normalized_tool_id.value)
+        if normalized_tool_id is ToolId.RESOLVE_SCOPE:
+            resolved = self._base.invoke(normalized_tool_id, request)
+            return resolved.model_copy(update=self._scope_overrides)
+        if normalized_tool_id in self._DYNAMIC_TOOL_IDS:
+            raise AssertionError(
+                f"Dynamic tool `{normalized_tool_id.value}` should not run when policy denies."
+            )
+        return self._base.invoke(normalized_tool_id, request)
 
 
 def _missing_openai_key() -> Any:
@@ -86,6 +119,10 @@ def _node_order(graph: Any, payload: dict[str, object]) -> list[str]:
     for chunk in graph.stream(payload, stream_mode="updates"):
         order.extend(chunk.keys())
     return order
+
+
+def _plan_envelope(plan: dict[str, object], *, confidence: float = 0.99) -> str:
+    return json.dumps({"plan": plan, "confidence": confidence})
 
 
 def test_supported_request_executes_legacy_report_path() -> None:
@@ -559,3 +596,118 @@ def test_smalltalk_stays_deterministic_even_when_llm_is_available(
     assert final_state.needs_clarification is False
     assert final_state.final_answer == "Ողջու՜յն։ Ինչո՞վ կարող եմ օգնել ձեզ այսօր։"
     assert final_state.clarification_question is None
+
+
+@pytest.mark.parametrize(
+    ("plan_payload", "scope_overrides", "expected_reason_code"),
+    [
+        (
+            {
+                "intent": "comparison",
+                "retrieval": {
+                    "mode": "total",
+                    "metric": "sales_total",
+                    "date_from": "2026-03-10",
+                    "date_to": "2026-03-16",
+                    "dimension": None,
+                },
+                "compare_to_previous_period": True,
+                "previous_period_retrieval": {
+                    "mode": "total",
+                    "metric": "sales_total",
+                    "date_from": "2026-03-03",
+                    "date_to": "2026-03-09",
+                    "dimension": None,
+                },
+                "scalar_calculations": [],
+                "include_moving_average": False,
+                "moving_average_window": 3,
+                "include_trend_slope": False,
+                "ranking": None,
+                "needs_clarification": False,
+                "clarification_question": None,
+                "reasoning_notes": "Comparison contract test.",
+            },
+            {"allowed_tool_operations": [ToolOperation.MOVING_AVERAGE]},
+            "tool_not_allowed",
+        ),
+        (
+            {
+                "intent": "ranking",
+                "retrieval": {
+                    "mode": "breakdown",
+                    "metric": "sales_total",
+                    "date_from": "2026-03-10",
+                    "date_to": "2026-03-16",
+                    "dimension": "source",
+                },
+                "compare_to_previous_period": False,
+                "previous_period_retrieval": None,
+                "scalar_calculations": [],
+                "include_moving_average": False,
+                "moving_average_window": 3,
+                "include_trend_slope": False,
+                "ranking": {
+                    "mode": "top_k",
+                    "k": 3,
+                    "metric_key": "value",
+                    "direction": "desc",
+                },
+                "needs_clarification": False,
+                "clarification_question": None,
+                "reasoning_notes": "Ranking contract test.",
+            },
+            {"allowed_dimensions": [DimensionName.DAY]},
+            "dimension_not_allowed",
+        ),
+        (
+            {
+                "intent": "trend",
+                "retrieval": {
+                    "mode": "timeseries",
+                    "metric": "sales_total",
+                    "date_from": "2026-03-10",
+                    "date_to": "2026-03-16",
+                    "dimension": "day",
+                },
+                "compare_to_previous_period": False,
+                "previous_period_retrieval": None,
+                "scalar_calculations": [],
+                "include_moving_average": True,
+                "moving_average_window": 3,
+                "include_trend_slope": True,
+                "ranking": None,
+                "needs_clarification": False,
+                "clarification_question": None,
+                "reasoning_notes": "Trend contract test.",
+            },
+            {"allowed_metrics": [MetricName.ORDER_COUNT]},
+            "metric_not_allowed",
+        ),
+    ],
+)
+def test_dynamic_routes_do_not_execute_tools_when_permission_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    plan_payload: dict[str, object],
+    scope_overrides: dict[str, object],
+    expected_reason_code: str,
+) -> None:
+    fake_client = _FakeLLMClient(output_text=_plan_envelope(plan_payload))
+    restricted_registry = _ScopeOverrideRegistry(scope_overrides=scope_overrides)
+    monkeypatch.setattr(graph_module, "get_llm_client", lambda: fake_client)
+    monkeypatch.setattr(
+        graph_module,
+        "get_settings",
+        lambda: _settings(planner_mode="llm", planner_fallback_enabled=False),
+    )
+    monkeypatch.setattr(graph_module, "get_tool_registry", lambda: restricted_registry)
+    graph = build_agent_graph()
+
+    final_state = AgentState.model_validate(graph.invoke(_initial_state("permission test")))
+
+    assert final_state.status is RunStatus.REJECTED
+    assert final_state.policy_route is not None
+    assert final_state.policy_route.value == "reject"
+    assert f"policy:{expected_reason_code}" in final_state.warnings
+    assert restricted_registry.calls == [ToolId.RESOLVE_SCOPE.value]
+    assert [step.step_id for step in final_state.execution_trace] == ["tool.resolve_scope"]

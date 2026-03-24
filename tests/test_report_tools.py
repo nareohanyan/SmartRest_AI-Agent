@@ -13,6 +13,7 @@ from app.agent.report_tools import (
     run_report_tool,
 )
 from app.reports import MOCK_BACKEND_WARNING, REPORT_CATALOG_ORDER
+from app.schemas.analysis import DimensionName, MetricName
 from app.schemas.reports import ReportFilters, ReportRequest, ReportType
 from app.schemas.tools import (
     AccessStatus,
@@ -20,6 +21,7 @@ from app.schemas.tools import (
     ListReportsRequest,
     ResolveScopeRequest,
     RunReportRequest,
+    ToolOperation,
 )
 
 
@@ -39,6 +41,9 @@ def test_resolve_scope_granted_returns_all_reports() -> None:
     assert response.status is AccessStatus.GRANTED
     assert response.denial_reason is None
     assert response.allowed_report_ids == list(REPORT_CATALOG_ORDER)
+    assert response.allowed_metrics == list(MetricName)
+    assert response.allowed_dimensions == list(DimensionName)
+    assert response.allowed_tool_operations == list(ToolOperation)
 
 
 def test_resolve_scope_denied_by_metadata_flag() -> None:
@@ -51,6 +56,28 @@ def test_resolve_scope_denied_by_metadata_flag() -> None:
     assert response.status is AccessStatus.DENIED
     assert response.denial_reason == "mock_access_denied"
     assert response.allowed_report_ids == []
+
+
+def test_resolve_scope_parses_granular_permissions_from_metadata() -> None:
+    request = ResolveScopeRequest.model_validate(
+        {
+            **_identity_payload(),
+            "metadata": {
+                "allow_metrics": "sales_total,order_count",
+                "allow_dimensions": "source",
+                "allow_tool_operations": "fetch_breakdown,top_k",
+            },
+        }
+    )
+
+    response = resolve_scope_tool(request)
+
+    assert response.allowed_metrics == [MetricName.SALES_TOTAL, MetricName.ORDER_COUNT]
+    assert response.allowed_dimensions == [DimensionName.SOURCE]
+    assert response.allowed_tool_operations == [
+        ToolOperation.FETCH_BREAKDOWN,
+        ToolOperation.TOP_K,
+    ]
 
 
 def test_list_reports_respects_allowed_ids_and_stable_catalog_order() -> None:

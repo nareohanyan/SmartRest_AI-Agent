@@ -47,6 +47,7 @@ from app.schemas.tools import (
     ResolveScopeResponse,
     RunReportRequest,
     RunReportResponse,
+    ToolOperation,
 )
 
 __all__ = [
@@ -88,6 +89,7 @@ __all__ = [
     "SchemaModel",
     "SharePercentCalculationSpec",
     "ToolResponses",
+    "ToolOperation",
     "ToolWarningCode",
     "WeightedAverageCalculationSpec",
 ]

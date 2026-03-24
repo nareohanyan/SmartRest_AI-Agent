@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from enum import Enum
+from typing import TypeVar
+
 from app.reports import (
     REPORT_CATALOG_ORDER,
     get_report_definition,
     list_report_definitions,
     run_mock_report,
 )
+from app.schemas.analysis import DimensionName, MetricName
 from app.schemas.tools import (
     AccessStatus,
     GetReportDefinitionRequest,
@@ -18,9 +22,29 @@ from app.schemas.tools import (
     ResolveScopeResponse,
     RunReportRequest,
     RunReportResponse,
+    ToolOperation,
 )
 
 _MOCK_DENIAL_REASON = "mock_access_denied"
+_CSV_SEPARATOR = ","
+_EnumT = TypeVar("_EnumT", bound=Enum)
+
+
+def _parse_enum_csv(
+    *,
+    metadata: dict[str, str],
+    key: str,
+    enum_type: type[_EnumT],
+) -> list[_EnumT] | None:
+    raw_value = metadata.get(key)
+    if raw_value is None:
+        return None
+
+    tokens = [token.strip() for token in raw_value.split(_CSV_SEPARATOR) if token.strip()]
+    if not tokens:
+        return []
+
+    return [enum_type(token) for token in tokens]
 
 
 def resolve_scope_tool(request: ResolveScopeRequest) -> ResolveScopeResponse:
@@ -35,6 +59,21 @@ def resolve_scope_tool(request: ResolveScopeRequest) -> ResolveScopeResponse:
     return ResolveScopeResponse(
         status=AccessStatus.GRANTED,
         allowed_report_ids=list(REPORT_CATALOG_ORDER),
+        allowed_metrics=_parse_enum_csv(
+            metadata=request.metadata,
+            key="allow_metrics",
+            enum_type=MetricName,
+        ),
+        allowed_dimensions=_parse_enum_csv(
+            metadata=request.metadata,
+            key="allow_dimensions",
+            enum_type=DimensionName,
+        ),
+        allowed_tool_operations=_parse_enum_csv(
+            metadata=request.metadata,
+            key="allow_tool_operations",
+            enum_type=ToolOperation,
+        ),
         denial_reason=None,
     )
 
@@ -54,4 +93,3 @@ def get_report_definition_tool(
 def run_report_tool(request: RunReportRequest) -> RunReportResponse:
     """Execute a deterministic mock report using validated request payload."""
     return run_mock_report(request.request)
-

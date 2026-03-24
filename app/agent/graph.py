@@ -318,6 +318,16 @@ def _policy_gate_node(state: AgentState) -> dict[str, Any]:
         date_to=retrieval.date_to if retrieval is not None else None,
         scope=state.user_scope,
         settings=get_settings(),
+        compare_to_previous_period=plan.compare_to_previous_period,
+        previous_period_metric=(
+            plan.previous_period_retrieval.metric
+            if plan.previous_period_retrieval is not None
+            else None
+        ),
+        ranking_mode=plan.ranking.mode if plan.ranking is not None else None,
+        include_moving_average=plan.include_moving_average,
+        include_trend_slope=plan.include_trend_slope,
+        has_scalar_calculations=bool(plan.scalar_calculations),
     )
 
     warnings = state.warnings

@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.schemas.agent import AgentState, IntentType, RunStatus
+from app.schemas.analysis import DimensionName, MetricName
 from app.schemas.reports import (
     ReportDefinition,
     ReportFilterKey,
@@ -26,6 +27,7 @@ from app.schemas.tools import (
     ResolveScopeResponse,
     RunReportRequest,
     RunReportResponse,
+    ToolOperation,
 )
 
 
@@ -221,6 +223,9 @@ def test_resolve_scope_contracts_valid_and_invalid() -> None:
 
     assert scope_request.user_id == 1
     assert scope_response.status is AccessStatus.GRANTED
+    assert scope_response.allowed_metrics == list(MetricName)
+    assert scope_response.allowed_dimensions == list(DimensionName)
+    assert scope_response.allowed_tool_operations == list(ToolOperation)
 
     with pytest.raises(ValidationError) as missing_field_exc:
         ResolveScopeRequest.model_validate({"user_id": 1, "profile_nick": "nick_1"})
@@ -239,6 +244,25 @@ def test_resolve_scope_contracts_valid_and_invalid() -> None:
         )
 
     assert "denial_reason is required when status is denied" in str(denied_reason_exc.value)
+
+
+def test_resolve_scope_accepts_explicit_granular_permissions() -> None:
+    scope_response = ResolveScopeResponse.model_validate(
+        {
+            "status": "granted",
+            "allowed_report_ids": ["sales_total"],
+            "allowed_metrics": ["sales_total"],
+            "allowed_dimensions": ["source"],
+            "allowed_tool_operations": ["fetch_breakdown", "top_k"],
+        }
+    )
+
+    assert scope_response.allowed_metrics == [MetricName.SALES_TOTAL]
+    assert scope_response.allowed_dimensions == [DimensionName.SOURCE]
+    assert scope_response.allowed_tool_operations == [
+        ToolOperation.FETCH_BREAKDOWN,
+        ToolOperation.TOP_K,
+    ]
 
 
 def test_list_reports_contracts_valid_and_invalid() -> None:

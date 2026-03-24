@@ -4,10 +4,16 @@ from datetime import date
 
 from app.core.config import Settings
 from app.schemas.agent import PolicyRoute
-from app.schemas.analysis import AnalysisIntent, DimensionName, MetricName, RetrievalMode
+from app.schemas.analysis import (
+    AnalysisIntent,
+    DimensionName,
+    MetricName,
+    RankingMode,
+    RetrievalMode,
+)
 from app.schemas.base import SchemaModel
 from app.schemas.reports import ReportFilters, ReportType
-from app.schemas.tools import AccessStatus, ResolveScopeResponse
+from app.schemas.tools import AccessStatus, ResolveScopeResponse, ToolOperation
 
 
 class PolicyDecision(SchemaModel):
@@ -55,6 +61,60 @@ def _estimated_tool_calls(intent: AnalysisIntent) -> int:
     return 1
 
 
+def _missing_metric_permissions(
+    *,
+    required_metrics: list[MetricName],
+    scope: ResolveScopeResponse,
+) -> list[MetricName]:
+    allowed_metrics = scope.allowed_metrics or []
+    return [metric for metric in required_metrics if metric not in allowed_metrics]
+
+
+def _missing_dimension_permissions(
+    *,
+    required_dimensions: list[DimensionName],
+    scope: ResolveScopeResponse,
+) -> list[DimensionName]:
+    allowed_dimensions = scope.allowed_dimensions or []
+    return [dimension for dimension in required_dimensions if dimension not in allowed_dimensions]
+
+
+def _missing_tool_permissions(
+    *,
+    required_tools: list[ToolOperation],
+    scope: ResolveScopeResponse,
+) -> list[ToolOperation]:
+    allowed_tools = scope.allowed_tool_operations or []
+    return [tool for tool in required_tools if tool not in allowed_tools]
+
+
+def _reject_missing_metric(metric: MetricName) -> PolicyDecision:
+    return PolicyDecision(
+        route=PolicyRoute.REJECT,
+        reason_code="metric_not_allowed",
+        reason_message=f"Metric `{metric.value}` is not allowed for this scope.",
+        allowed=False,
+    )
+
+
+def _reject_missing_dimension(dimension: DimensionName) -> PolicyDecision:
+    return PolicyDecision(
+        route=PolicyRoute.REJECT,
+        reason_code="dimension_not_allowed",
+        reason_message=f"Dimension `{dimension.value}` is not allowed for this scope.",
+        allowed=False,
+    )
+
+
+def _reject_missing_tool(tool: ToolOperation) -> PolicyDecision:
+    return PolicyDecision(
+        route=PolicyRoute.REJECT,
+        reason_code="tool_not_allowed",
+        reason_message=f"Tool operation `{tool.value}` is not allowed for this scope.",
+        allowed=False,
+    )
+
+
 def evaluate_plan_policy(
     *,
     plan_intent: AnalysisIntent,
@@ -65,6 +125,12 @@ def evaluate_plan_policy(
     date_to: date | None,
     scope: ResolveScopeResponse | None,
     settings: Settings,
+    compare_to_previous_period: bool = False,
+    previous_period_metric: MetricName | None = None,
+    ranking_mode: RankingMode | None = None,
+    include_moving_average: bool = False,
+    include_trend_slope: bool = False,
+    has_scalar_calculations: bool = False,
 ) -> PolicyDecision:
     if scope is None or scope.status is AccessStatus.DENIED:
         return PolicyDecision(
@@ -174,6 +240,22 @@ def evaluate_plan_policy(
                 reason_message="Comparison requires total retrieval mode.",
                 allowed=False,
             )
+        required_metrics = [retrieval_metric]
+        if compare_to_previous_period and previous_period_metric is not None:
+            required_metrics.append(previous_period_metric)
+        missing_metrics = _missing_metric_permissions(
+            required_metrics=[metric for metric in required_metrics if metric is not None],
+            scope=scope,
+        )
+        if missing_metrics:
+            return _reject_missing_metric(missing_metrics[0])
+
+        required_tools = [ToolOperation.FETCH_TOTAL_METRIC]
+        if has_scalar_calculations:
+            required_tools.append(ToolOperation.COMPUTE_SCALAR_METRICS)
+        missing_tools = _missing_tool_permissions(required_tools=required_tools, scope=scope)
+        if missing_tools:
+            return _reject_missing_tool(missing_tools[0])
         return PolicyDecision(
             route=PolicyRoute.RUN_COMPARISON,
             reason_code="ok",
@@ -192,6 +274,28 @@ def evaluate_plan_policy(
                 reason_message="Ranking requires source breakdown retrieval.",
                 allowed=False,
             )
+        missing_metrics = _missing_metric_permissions(
+            required_metrics=[retrieval_metric] if retrieval_metric is not None else [],
+            scope=scope,
+        )
+        if missing_metrics:
+            return _reject_missing_metric(missing_metrics[0])
+
+        missing_dimensions = _missing_dimension_permissions(
+            required_dimensions=[DimensionName.SOURCE],
+            scope=scope,
+        )
+        if missing_dimensions:
+            return _reject_missing_dimension(missing_dimensions[0])
+
+        required_tools = [ToolOperation.FETCH_BREAKDOWN, ToolOperation.ATTACH_BREAKDOWN_SHARE]
+        if ranking_mode is RankingMode.TOP_K:
+            required_tools.append(ToolOperation.TOP_K)
+        if ranking_mode is RankingMode.BOTTOM_K:
+            required_tools.append(ToolOperation.BOTTOM_K)
+        missing_tools = _missing_tool_permissions(required_tools=required_tools, scope=scope)
+        if missing_tools:
+            return _reject_missing_tool(missing_tools[0])
         return PolicyDecision(
             route=PolicyRoute.RUN_RANKING,
             reason_code="ok",
@@ -207,6 +311,28 @@ def evaluate_plan_policy(
                 reason_message="Trend requires timeseries retrieval mode.",
                 allowed=False,
             )
+        missing_metrics = _missing_metric_permissions(
+            required_metrics=[retrieval_metric] if retrieval_metric is not None else [],
+            scope=scope,
+        )
+        if missing_metrics:
+            return _reject_missing_metric(missing_metrics[0])
+
+        missing_dimensions = _missing_dimension_permissions(
+            required_dimensions=[DimensionName.DAY],
+            scope=scope,
+        )
+        if missing_dimensions:
+            return _reject_missing_dimension(missing_dimensions[0])
+
+        required_tools = [ToolOperation.FETCH_TIMESERIES]
+        if include_moving_average:
+            required_tools.append(ToolOperation.MOVING_AVERAGE)
+        if include_trend_slope:
+            required_tools.append(ToolOperation.TREND_SLOPE)
+        missing_tools = _missing_tool_permissions(required_tools=required_tools, scope=scope)
+        if missing_tools:
+            return _reject_missing_tool(missing_tools[0])
         return PolicyDecision(
             route=PolicyRoute.RUN_TREND,
             reason_code="ok",
