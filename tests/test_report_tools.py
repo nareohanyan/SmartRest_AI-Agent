@@ -17,6 +17,7 @@ from app.schemas.analysis import DimensionName, MetricName
 from app.schemas.reports import ReportFilters, ReportRequest, ReportType
 from app.schemas.tools import (
     AccessStatus,
+    ExportMode,
     GetReportDefinitionRequest,
     ListReportsRequest,
     ResolveScopeRequest,
@@ -41,6 +42,8 @@ def test_resolve_scope_granted_returns_all_reports() -> None:
     assert response.status is AccessStatus.GRANTED
     assert response.denial_reason is None
     assert response.allowed_report_ids == list(REPORT_CATALOG_ORDER)
+    assert response.allowed_branch_ids == ["*"]
+    assert response.allowed_export_modes == [ExportMode.CSV, ExportMode.XLSX, ExportMode.PDF]
     assert response.allowed_metric_ids == [metric.value for metric in MetricName]
     assert response.allowed_dimension_ids == [dimension.value for dimension in DimensionName]
     assert response.allowed_metrics == list(MetricName)
@@ -67,6 +70,8 @@ def test_resolve_scope_parses_granular_permissions_from_metadata() -> None:
             "metadata": {
                 "allow_metrics": "sales_total,order_count",
                 "allow_dimensions": "source",
+                "allow_branch_ids": "branch_1,branch_3",
+                "allow_export_modes": "csv,xlsx",
                 "allow_tool_operations": "fetch_breakdown,top_k",
             },
         }
@@ -74,6 +79,8 @@ def test_resolve_scope_parses_granular_permissions_from_metadata() -> None:
 
     response = resolve_scope_tool(request)
 
+    assert response.allowed_branch_ids == ["branch_1", "branch_3"]
+    assert response.allowed_export_modes == [ExportMode.CSV, ExportMode.XLSX]
     assert response.allowed_metric_ids == [
         MetricName.SALES_TOTAL.value,
         MetricName.ORDER_COUNT.value,

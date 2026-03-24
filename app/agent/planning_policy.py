@@ -14,7 +14,7 @@ from app.schemas.analysis import (
 )
 from app.schemas.base import SchemaModel
 from app.schemas.reports import ReportFilters, ReportType
-from app.schemas.tools import AccessStatus, ResolveScopeResponse, ToolOperation
+from app.schemas.tools import AccessStatus, ExportMode, ResolveScopeResponse, ToolOperation
 
 
 class PolicyDecision(SchemaModel):
@@ -105,6 +105,25 @@ def _missing_tool_permissions(
     return [tool for tool in required_tools if tool not in allowed_tools]
 
 
+def _missing_branch_permissions(
+    *,
+    requested_branch_ids: list[str],
+    scope: ResolveScopeResponse,
+) -> list[str]:
+    allowed_branch_ids = set(scope.allowed_branch_ids or [])
+    if "*" in allowed_branch_ids:
+        return []
+    return [branch_id for branch_id in requested_branch_ids if branch_id not in allowed_branch_ids]
+
+
+def _is_export_mode_allowed(
+    *,
+    requested_export_mode: ExportMode,
+    scope: ResolveScopeResponse,
+) -> bool:
+    return requested_export_mode in (scope.allowed_export_modes or [])
+
+
 def _reject_missing_metric(metric_id: str) -> PolicyDecision:
     return PolicyDecision(
         route=PolicyRoute.REJECT,
@@ -132,6 +151,24 @@ def _reject_missing_tool(tool: ToolOperation) -> PolicyDecision:
     )
 
 
+def _reject_missing_branch(branch_id: str) -> PolicyDecision:
+    return PolicyDecision(
+        route=PolicyRoute.REJECT,
+        reason_code="branch_not_allowed",
+        reason_message=f"Branch `{branch_id}` is not allowed for this scope.",
+        allowed=False,
+    )
+
+
+def _reject_export_mode(export_mode: ExportMode) -> PolicyDecision:
+    return PolicyDecision(
+        route=PolicyRoute.REJECT,
+        reason_code="export_mode_not_allowed",
+        reason_message=f"Export mode `{export_mode.value}` is not allowed for this scope.",
+        allowed=False,
+    )
+
+
 def evaluate_plan_policy(
     *,
     plan_intent: AnalysisIntent,
@@ -148,6 +185,8 @@ def evaluate_plan_policy(
     include_moving_average: bool = False,
     include_trend_slope: bool = False,
     has_scalar_calculations: bool = False,
+    requested_branch_ids: list[str] | None = None,
+    requested_export_mode: ExportMode | None = None,
 ) -> PolicyDecision:
     if scope is None or scope.status is AccessStatus.DENIED:
         return PolicyDecision(
@@ -219,6 +258,20 @@ def evaluate_plan_policy(
             reason_message="Planned execution exceeds allowed tool budget.",
             allowed=False,
         )
+
+    if requested_branch_ids:
+        missing_branch_ids = _missing_branch_permissions(
+            requested_branch_ids=requested_branch_ids,
+            scope=scope,
+        )
+        if missing_branch_ids:
+            return _reject_missing_branch(missing_branch_ids[0])
+
+    if requested_export_mode is not None and not _is_export_mode_allowed(
+        requested_export_mode=requested_export_mode,
+        scope=scope,
+    ):
+        return _reject_export_mode(requested_export_mode)
 
     planner_constraints = evaluate_planner_constraints(
         plan_intent=plan_intent,

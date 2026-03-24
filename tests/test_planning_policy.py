@@ -13,7 +13,7 @@ from app.schemas.analysis import (
     RetrievalMode,
 )
 from app.schemas.reports import ReportType
-from app.schemas.tools import AccessStatus, ResolveScopeResponse, ToolOperation
+from app.schemas.tools import AccessStatus, ExportMode, ResolveScopeResponse, ToolOperation
 
 
 def _settings(**overrides: object) -> SimpleNamespace:
@@ -28,6 +28,8 @@ def _settings(**overrides: object) -> SimpleNamespace:
 
 def _granted_scope(
     *allowed: ReportType,
+    allowed_branch_ids: list[str] | None = None,
+    allowed_export_modes: list[ExportMode] | None = None,
     allowed_metric_ids: list[str] | None = None,
     allowed_dimension_ids: list[str] | None = None,
     allowed_metrics: list[MetricName] | None = None,
@@ -37,6 +39,8 @@ def _granted_scope(
     return ResolveScopeResponse(
         status=AccessStatus.GRANTED,
         allowed_report_ids=list(allowed),
+        allowed_branch_ids=allowed_branch_ids,
+        allowed_export_modes=allowed_export_modes,
         allowed_metric_ids=allowed_metric_ids,
         allowed_dimension_ids=allowed_dimension_ids,
         allowed_metrics=allowed_metrics,
@@ -168,6 +172,48 @@ def test_policy_rejects_when_metric_id_permission_is_missing() -> None:
 
     assert decision.route is PolicyRoute.REJECT
     assert decision.reason_code == "metric_not_allowed"
+    assert decision.allowed is False
+
+
+def test_policy_rejects_when_requested_branch_is_not_allowed() -> None:
+    decision = evaluate_plan_policy(
+        plan_intent=AnalysisIntent.METRIC_TOTAL,
+        retrieval_mode=RetrievalMode.TOTAL,
+        retrieval_metric=MetricName.SALES_TOTAL,
+        retrieval_dimension=None,
+        date_from=date(2026, 3, 1),
+        date_to=date(2026, 3, 7),
+        requested_branch_ids=["branch_7"],
+        scope=_granted_scope(
+            ReportType.SALES_TOTAL,
+            allowed_branch_ids=["branch_1", "branch_2"],
+        ),
+        settings=_settings(),
+    )
+
+    assert decision.route is PolicyRoute.REJECT
+    assert decision.reason_code == "branch_not_allowed"
+    assert decision.allowed is False
+
+
+def test_policy_rejects_when_export_mode_is_not_allowed() -> None:
+    decision = evaluate_plan_policy(
+        plan_intent=AnalysisIntent.METRIC_TOTAL,
+        retrieval_mode=RetrievalMode.TOTAL,
+        retrieval_metric=MetricName.SALES_TOTAL,
+        retrieval_dimension=None,
+        date_from=date(2026, 3, 1),
+        date_to=date(2026, 3, 7),
+        requested_export_mode=ExportMode.PDF,
+        scope=_granted_scope(
+            ReportType.SALES_TOTAL,
+            allowed_export_modes=[ExportMode.CSV, ExportMode.XLSX],
+        ),
+        settings=_settings(),
+    )
+
+    assert decision.route is PolicyRoute.REJECT
+    assert decision.reason_code == "export_mode_not_allowed"
     assert decision.allowed is False
 
 

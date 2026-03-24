@@ -93,22 +93,42 @@ def _default_runtime_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(graph_module, "get_settings", lambda: _settings())
 
 
-def _scope_request_payload(*, deny: bool = False) -> dict[str, object]:
+def _scope_request_payload(
+    *,
+    deny: bool = False,
+    metadata_overrides: dict[str, str] | None = None,
+    requested_branch_ids: list[str] | None = None,
+    requested_export_mode: str | None = None,
+) -> dict[str, object]:
     metadata: dict[str, str] = {"access": "deny"} if deny else {}
-    return {
+    metadata.update(metadata_overrides or {})
+    payload: dict[str, object] = {
         "user_id": 101,
         "profile_id": 201,
         "profile_nick": "Nick",
         "metadata": metadata,
     }
+    if requested_branch_ids is not None:
+        payload["requested_branch_ids"] = requested_branch_ids
+    if requested_export_mode is not None:
+        payload["requested_export_mode"] = requested_export_mode
+    return payload
 
 
-def _initial_state(question: str, *, deny_scope: bool = False) -> dict[str, object]:
+def _initial_state(
+    question: str,
+    *,
+    deny_scope: bool = False,
+    scope_payload_overrides: dict[str, object] | None = None,
+) -> dict[str, object]:
+    scope_payload = _scope_request_payload(deny=deny_scope)
+    if scope_payload_overrides:
+        scope_payload = {**scope_payload, **scope_payload_overrides}
     return {
         "thread_id": "11111111-1111-1111-1111-111111111111",
         "run_id": "22222222-2222-2222-2222-222222222222",
         "user_question": question,
-        "scope_request": _scope_request_payload(deny=deny_scope),
+        "scope_request": scope_payload,
         "needs_clarification": False,
         "status": "running",
     }
@@ -399,6 +419,44 @@ def test_scope_denied_blocks_execution() -> None:
 
     assert order == ["resolve_scope", "plan_analysis", "policy_gate", "route_decision", "reject"]
     assert final_state.status is RunStatus.DENIED
+    assert final_state.tool_responses.run_report is None
+
+
+def test_branch_permission_denied_blocks_execution_before_tool_calls() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state(
+        "What were total sales 2026-03-01 to 2026-03-07?",
+        scope_payload_overrides={
+            "metadata": {"allow_branch_ids": "branch_1"},
+            "requested_branch_ids": ["branch_2"],
+        },
+    )
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == ["resolve_scope", "plan_analysis", "policy_gate", "route_decision", "reject"]
+    assert final_state.status is RunStatus.REJECTED
+    assert "policy:branch_not_allowed" in final_state.warnings
+    assert final_state.tool_responses.run_report is None
+
+
+def test_export_mode_permission_denied_blocks_execution() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state(
+        "What were total sales 2026-03-01 to 2026-03-07?",
+        scope_payload_overrides={
+            "metadata": {"allow_export_modes": "csv"},
+            "requested_export_mode": "pdf",
+        },
+    )
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == ["resolve_scope", "plan_analysis", "policy_gate", "route_decision", "reject"]
+    assert final_state.status is RunStatus.REJECTED
+    assert "policy:export_mode_not_allowed" in final_state.warnings
     assert final_state.tool_responses.run_report is None
 
 

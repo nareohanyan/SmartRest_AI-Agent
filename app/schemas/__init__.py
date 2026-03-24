@@ -39,6 +39,7 @@ from app.schemas.reports import (
 )
 from app.schemas.tools import (
     AccessStatus,
+    ExportMode,
     GetReportDefinitionRequest,
     GetReportDefinitionResponse,
     ListReportsRequest,
@@ -64,6 +65,7 @@ __all__ = [
     "ExecutionStepStatus",
     "ExecutionStepType",
     "ExecutionTraceStep",
+    "ExportMode",
     "GetReportDefinitionRequest",
     "GetReportDefinitionResponse",
     "IntentType",

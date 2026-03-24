@@ -19,6 +19,7 @@ from app.schemas.reports import (
 )
 from app.schemas.tools import (
     AccessStatus,
+    ExportMode,
     GetReportDefinitionRequest,
     GetReportDefinitionResponse,
     ListReportsRequest,
@@ -223,6 +224,8 @@ def test_resolve_scope_contracts_valid_and_invalid() -> None:
 
     assert scope_request.user_id == 1
     assert scope_response.status is AccessStatus.GRANTED
+    assert scope_response.allowed_branch_ids == ["*"]
+    assert scope_response.allowed_export_modes is not None
     assert scope_response.allowed_metric_ids == [
         MetricName.SALES_TOTAL.value,
         MetricName.ORDER_COUNT.value,
@@ -260,12 +263,16 @@ def test_resolve_scope_accepts_explicit_granular_permissions() -> None:
         {
             "status": "granted",
             "allowed_report_ids": ["sales_total"],
+            "allowed_branch_ids": ["branch_1"],
+            "allowed_export_modes": ["csv"],
             "allowed_metrics": ["sales_total"],
             "allowed_dimensions": ["source"],
             "allowed_tool_operations": ["fetch_breakdown", "top_k"],
         }
     )
 
+    assert scope_response.allowed_branch_ids == ["branch_1"]
+    assert scope_response.allowed_export_modes == [ExportMode.CSV]
     assert scope_response.allowed_metrics == [MetricName.SALES_TOTAL]
     assert scope_response.allowed_dimensions == [DimensionName.SOURCE]
     assert scope_response.allowed_metric_ids == [MetricName.SALES_TOTAL.value]
@@ -281,16 +288,33 @@ def test_resolve_scope_accepts_id_permissions_outside_legacy_enums() -> None:
         {
             "status": "granted",
             "allowed_report_ids": ["sales_total"],
+            "allowed_branch_ids": ["branch_1", "branch_2"],
+            "allowed_export_modes": ["xlsx"],
             "allowed_metric_ids": ["sales_total", "completed_order_count"],
             "allowed_dimension_ids": ["source", "branch"],
             "allowed_tool_operations": ["fetch_breakdown"],
         }
     )
 
+    assert scope_response.allowed_branch_ids == ["branch_1", "branch_2"]
+    assert scope_response.allowed_export_modes == [ExportMode.XLSX]
     assert scope_response.allowed_metric_ids == ["sales_total", "completed_order_count"]
     assert scope_response.allowed_dimension_ids == ["source", "branch"]
     assert scope_response.allowed_metrics == [MetricName.SALES_TOTAL]
     assert scope_response.allowed_dimensions == [DimensionName.SOURCE]
+
+
+def test_resolve_scope_request_accepts_requested_branch_and_export() -> None:
+    scope_request = ResolveScopeRequest.model_validate(
+        {
+            **_identity_payload(),
+            "requested_branch_ids": ["branch_1"],
+            "requested_export_mode": "csv",
+        }
+    )
+
+    assert scope_request.requested_branch_ids == ["branch_1"]
+    assert scope_request.requested_export_mode is ExportMode.CSV
 
 
 def test_list_reports_contracts_valid_and_invalid() -> None:

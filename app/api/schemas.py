@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.agent import RunStatus
 from app.schemas.reports import ReportFilters, ReportType
+from app.schemas.tools import ExportMode
 
 
 class _ApiSchema(BaseModel):
@@ -17,6 +18,8 @@ class ScopeRequestPayload(_ApiSchema):
     profile_id: int
     profile_nick: str = Field(min_length=1)
     metadata: dict[str, str] = Field(default_factory=dict)
+    requested_branch_ids: list[str] | None = None
+    requested_export_mode: ExportMode | None = None
 
 
 class AgentRunRequest(_ApiSchema):

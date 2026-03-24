@@ -17,6 +17,29 @@ class MetricType(str, Enum):
     DERIVED = "derived"
 
 
+class NullHandlingPolicy(str, Enum):
+    TREAT_AS_ZERO = "treat_as_zero"
+    TREAT_AS_MISSING = "treat_as_missing"
+    REJECT = "reject"
+
+
+class ZeroHandlingPolicy(str, Enum):
+    ALLOW_ZERO = "allow_zero"
+    DENOMINATOR_ZERO_RETURNS_NULL_WARN = "denominator_zero_returns_null_warn"
+
+
+@dataclass(frozen=True)
+class OperationalTrustMetadata:
+    source_entity: str
+    owner: str
+    refresh_sla_minutes: int
+    max_freshness_lag_minutes: int
+    quality_checks: tuple[str, ...]
+    null_handling_policy: NullHandlingPolicy
+    zero_handling_policy: ZeroHandlingPolicy
+    late_arrival_policy: str
+
+
 @dataclass(frozen=True)
 class DimensionDefinition:
     dimension_id: str
@@ -38,6 +61,30 @@ class MetricDefinition:
     formula_ast: FormulaAst | None = None
     dependencies: tuple[str, ...] = ()
     definition_version: str | None = None
+    operational_trust: OperationalTrustMetadata | None = None
+
+
+def _trust(
+    *,
+    source_entity: str,
+    owner: str,
+    refresh_sla_minutes: int,
+    max_freshness_lag_minutes: int,
+    quality_checks: tuple[str, ...],
+    null_handling_policy: NullHandlingPolicy,
+    zero_handling_policy: ZeroHandlingPolicy,
+    late_arrival_policy: str,
+) -> OperationalTrustMetadata:
+    return OperationalTrustMetadata(
+        source_entity=source_entity,
+        owner=owner,
+        refresh_sla_minutes=refresh_sla_minutes,
+        max_freshness_lag_minutes=max_freshness_lag_minutes,
+        quality_checks=quality_checks,
+        null_handling_policy=null_handling_policy,
+        zero_handling_policy=zero_handling_policy,
+        late_arrival_policy=late_arrival_policy,
+    )
 
 
 _DIMENSIONS: tuple[DimensionDefinition, ...] = (
@@ -110,6 +157,16 @@ _METRICS: tuple[MetricDefinition, ...] = (
         ),
         aliases=("sales", "net sales", "revenue", "real sales"),
         permission_class="financial_core",
+        operational_trust=_trust(
+            source_entity="analytics.fact_orders",
+            owner="data_finance",
+            refresh_sla_minutes=30,
+            max_freshness_lag_minutes=60,
+            quality_checks=("sales_non_negative", "currency_consistency"),
+            null_handling_policy=NullHandlingPolicy.TREAT_AS_ZERO,
+            zero_handling_policy=ZeroHandlingPolicy.ALLOW_ZERO,
+            late_arrival_policy="restate_last_7_days",
+        ),
     ),
     MetricDefinition(
         metric_id="order_count",
@@ -129,6 +186,16 @@ _METRICS: tuple[MetricDefinition, ...] = (
         ),
         aliases=("orders", "completed orders", "transactions"),
         permission_class="operational_core",
+        operational_trust=_trust(
+            source_entity="analytics.fact_orders",
+            owner="data_ops",
+            refresh_sla_minutes=15,
+            max_freshness_lag_minutes=45,
+            quality_checks=("order_count_non_negative", "status_code_valid"),
+            null_handling_policy=NullHandlingPolicy.TREAT_AS_ZERO,
+            zero_handling_policy=ZeroHandlingPolicy.ALLOW_ZERO,
+            late_arrival_policy="restate_last_3_days",
+        ),
     ),
     MetricDefinition(
         metric_id="completed_order_count",
@@ -139,6 +206,16 @@ _METRICS: tuple[MetricDefinition, ...] = (
         allowed_dimension_ids=("branch", "source", "day", "hour", "weekday", "cashier"),
         aliases=("finished orders",),
         permission_class="operational_core",
+        operational_trust=_trust(
+            source_entity="analytics.fact_orders",
+            owner="data_ops",
+            refresh_sla_minutes=15,
+            max_freshness_lag_minutes=45,
+            quality_checks=("completed_orders_status_valid",),
+            null_handling_policy=NullHandlingPolicy.TREAT_AS_ZERO,
+            zero_handling_policy=ZeroHandlingPolicy.ALLOW_ZERO,
+            late_arrival_policy="restate_last_3_days",
+        ),
     ),
     MetricDefinition(
         metric_id="canceled_order_count",
@@ -149,6 +226,16 @@ _METRICS: tuple[MetricDefinition, ...] = (
         allowed_dimension_ids=("branch", "source", "day", "hour", "weekday", "cashier"),
         aliases=("canceled orders", "cancel count", "order cancellations"),
         permission_class="operational_sensitive",
+        operational_trust=_trust(
+            source_entity="analytics.fact_orders",
+            owner="data_ops",
+            refresh_sla_minutes=15,
+            max_freshness_lag_minutes=45,
+            quality_checks=("canceled_orders_status_valid",),
+            null_handling_policy=NullHandlingPolicy.TREAT_AS_ZERO,
+            zero_handling_policy=ZeroHandlingPolicy.ALLOW_ZERO,
+            late_arrival_policy="restate_last_3_days",
+        ),
     ),
     MetricDefinition(
         metric_id="refund_amount",
@@ -159,6 +246,16 @@ _METRICS: tuple[MetricDefinition, ...] = (
         allowed_dimension_ids=("branch", "source", "day", "hour", "weekday", "payment_method"),
         aliases=("refunds", "returned money"),
         permission_class="financial_sensitive",
+        operational_trust=_trust(
+            source_entity="analytics.fact_refunds",
+            owner="data_finance",
+            refresh_sla_minutes=60,
+            max_freshness_lag_minutes=180,
+            quality_checks=("refund_non_negative", "refund_links_to_order"),
+            null_handling_policy=NullHandlingPolicy.TREAT_AS_ZERO,
+            zero_handling_policy=ZeroHandlingPolicy.ALLOW_ZERO,
+            late_arrival_policy="restate_last_30_days",
+        ),
     ),
     MetricDefinition(
         metric_id="discount_amount",
@@ -169,6 +266,16 @@ _METRICS: tuple[MetricDefinition, ...] = (
         allowed_dimension_ids=("branch", "source", "day", "hour", "weekday", "category"),
         aliases=("discounts", "promo discounts"),
         permission_class="financial_core",
+        operational_trust=_trust(
+            source_entity="analytics.fact_discounts",
+            owner="data_finance",
+            refresh_sla_minutes=30,
+            max_freshness_lag_minutes=120,
+            quality_checks=("discount_non_negative", "discount_within_sales_bounds"),
+            null_handling_policy=NullHandlingPolicy.TREAT_AS_ZERO,
+            zero_handling_policy=ZeroHandlingPolicy.ALLOW_ZERO,
+            late_arrival_policy="restate_last_14_days",
+        ),
     ),
     MetricDefinition(
         metric_id="average_check",
@@ -193,6 +300,16 @@ _METRICS: tuple[MetricDefinition, ...] = (
         ),
         dependencies=("sales_total", "completed_order_count"),
         definition_version="v2",
+        operational_trust=_trust(
+            source_entity="derived:average_check",
+            owner="analytics_engine",
+            refresh_sla_minutes=30,
+            max_freshness_lag_minutes=60,
+            quality_checks=("dependencies_available", "formula_validated"),
+            null_handling_policy=NullHandlingPolicy.TREAT_AS_MISSING,
+            zero_handling_policy=ZeroHandlingPolicy.DENOMINATOR_ZERO_RETURNS_NULL_WARN,
+            late_arrival_policy="inherits_dependencies",
+        ),
     ),
     MetricDefinition(
         metric_id="refund_rate",
@@ -208,6 +325,16 @@ _METRICS: tuple[MetricDefinition, ...] = (
             denominator_metric_id="sales_total",
         ),
         dependencies=("refund_amount", "sales_total"),
+        operational_trust=_trust(
+            source_entity="derived:refund_rate",
+            owner="analytics_engine",
+            refresh_sla_minutes=60,
+            max_freshness_lag_minutes=180,
+            quality_checks=("dependencies_available", "formula_validated"),
+            null_handling_policy=NullHandlingPolicy.TREAT_AS_MISSING,
+            zero_handling_policy=ZeroHandlingPolicy.DENOMINATOR_ZERO_RETURNS_NULL_WARN,
+            late_arrival_policy="inherits_dependencies",
+        ),
     ),
     MetricDefinition(
         metric_id="discount_share",
@@ -223,6 +350,16 @@ _METRICS: tuple[MetricDefinition, ...] = (
             denominator_metric_id="sales_total",
         ),
         dependencies=("discount_amount", "sales_total"),
+        operational_trust=_trust(
+            source_entity="derived:discount_share",
+            owner="analytics_engine",
+            refresh_sla_minutes=30,
+            max_freshness_lag_minutes=120,
+            quality_checks=("dependencies_available", "formula_validated"),
+            null_handling_policy=NullHandlingPolicy.TREAT_AS_MISSING,
+            zero_handling_policy=ZeroHandlingPolicy.DENOMINATOR_ZERO_RETURNS_NULL_WARN,
+            late_arrival_policy="inherits_dependencies",
+        ),
     ),
 )
 
@@ -267,6 +404,21 @@ def get_metric_registry() -> dict[str, MetricDefinition]:
                 )
         elif metric.formula_ast is not None:
             raise ValueError(f"Base metric `{metric.metric_id}` must not define formula_ast")
+
+        if metric.operational_trust is None:
+            raise ValueError(f"Metric `{metric.metric_id}` must define operational_trust metadata.")
+        if not metric.operational_trust.source_entity.strip():
+            raise ValueError(f"Metric `{metric.metric_id}` has empty source_entity.")
+        if not metric.operational_trust.owner.strip():
+            raise ValueError(f"Metric `{metric.metric_id}` has empty owner.")
+        if metric.operational_trust.refresh_sla_minutes <= 0:
+            raise ValueError(f"Metric `{metric.metric_id}` has invalid refresh_sla_minutes.")
+        if metric.operational_trust.max_freshness_lag_minutes <= 0:
+            raise ValueError(
+                f"Metric `{metric.metric_id}` has invalid max_freshness_lag_minutes."
+            )
+        if not metric.operational_trust.quality_checks:
+            raise ValueError(f"Metric `{metric.metric_id}` has no quality_checks.")
 
     return registry
 
@@ -316,3 +468,29 @@ def all_metric_ids() -> tuple[str, ...]:
 
 def all_dimension_ids() -> tuple[str, ...]:
     return tuple(get_dimension_registry().keys())
+
+
+def evaluate_metric_operational_trust(
+    *,
+    metric_id: str,
+    observed_freshness_lag_minutes: int | None = None,
+    failed_quality_checks: set[str] | None = None,
+) -> list[str]:
+    metric = get_metric_registry().get(metric_id)
+    if metric is None:
+        raise ValueError(f"Unknown metric id: {metric_id}")
+    metadata = metric.operational_trust
+    if metadata is None:
+        raise ValueError(f"Operational trust metadata is missing for metric: {metric_id}")
+
+    warnings: list[str] = []
+    if observed_freshness_lag_minutes is None:
+        warnings.append("trust:freshness_unknown")
+    elif observed_freshness_lag_minutes > metadata.max_freshness_lag_minutes:
+        warnings.append("trust:freshness_stale")
+
+    for quality_check in sorted(failed_quality_checks or set()):
+        if quality_check in metadata.quality_checks:
+            warnings.append(f"trust:quality_failed:{quality_check}")
+
+    return warnings

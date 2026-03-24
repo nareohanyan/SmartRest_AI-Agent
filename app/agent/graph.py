@@ -328,6 +328,16 @@ def _policy_gate_node(state: AgentState) -> dict[str, Any]:
         include_moving_average=plan.include_moving_average,
         include_trend_slope=plan.include_trend_slope,
         has_scalar_calculations=bool(plan.scalar_calculations),
+        requested_branch_ids=(
+            state.scope_request.requested_branch_ids
+            if state.scope_request is not None
+            else None
+        ),
+        requested_export_mode=(
+            state.scope_request.requested_export_mode
+            if state.scope_request is not None
+            else None
+        ),
     )
 
     warnings = state.warnings

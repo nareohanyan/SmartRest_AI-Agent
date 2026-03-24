@@ -14,6 +14,7 @@ from app.reports import (
 from app.schemas.analysis import DimensionName, MetricName
 from app.schemas.tools import (
     AccessStatus,
+    ExportMode,
     GetReportDefinitionRequest,
     GetReportDefinitionResponse,
     ListReportsRequest,
@@ -70,6 +71,12 @@ def resolve_scope_tool(request: ResolveScopeRequest) -> ResolveScopeResponse:
     return ResolveScopeResponse(
         status=AccessStatus.GRANTED,
         allowed_report_ids=list(REPORT_CATALOG_ORDER),
+        allowed_branch_ids=_parse_csv(metadata=request.metadata, key="allow_branch_ids"),
+        allowed_export_modes=_parse_enum_csv(
+            metadata=request.metadata,
+            key="allow_export_modes",
+            enum_type=ExportMode,
+        ),
         allowed_metric_ids=(
             _parse_csv(metadata=request.metadata, key="allow_metric_ids")
             or _parse_csv(metadata=request.metadata, key="allow_metrics")

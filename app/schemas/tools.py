@@ -14,6 +14,12 @@ class AccessStatus(str, Enum):
     DENIED = "denied"
 
 
+class ExportMode(str, Enum):
+    CSV = "csv"
+    XLSX = "xlsx"
+    PDF = "pdf"
+
+
 class ToolOperation(str, Enum):
     RESOLVE_SCOPE = "resolve_scope"
     RUN_REPORT = "run_report"
@@ -33,11 +39,15 @@ class ResolveScopeRequest(SchemaModel):
     profile_id: int
     profile_nick: str = Field(min_length=1)
     metadata: dict[str, str] = Field(default_factory=dict)
+    requested_branch_ids: list[str] | None = None
+    requested_export_mode: ExportMode | None = None
 
 
 class ResolveScopeResponse(SchemaModel):
     status: AccessStatus
     allowed_report_ids: list[ReportType]
+    allowed_branch_ids: list[str] | None = None
+    allowed_export_modes: list[ExportMode] | None = None
     allowed_metric_ids: list[str] | None = None
     allowed_dimension_ids: list[str] | None = None
     allowed_metrics: list[MetricName] | None = None
@@ -54,6 +64,11 @@ class ResolveScopeResponse(SchemaModel):
             raise ValueError("denial_reason must be null when status is granted")
 
         if self.status is AccessStatus.GRANTED:
+            if self.allowed_branch_ids is None:
+                self.allowed_branch_ids = ["*"]
+            if self.allowed_export_modes is None:
+                self.allowed_export_modes = list(ExportMode)
+
             if self.allowed_metric_ids is None:
                 if self.allowed_metrics is not None:
                     self.allowed_metric_ids = [metric.value for metric in self.allowed_metrics]
