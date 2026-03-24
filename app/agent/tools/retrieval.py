@@ -21,6 +21,7 @@ from app.schemas.analysis import (
     TimeseriesPoint,
     TimeseriesRequest,
     TimeseriesResponse,
+    ToolWarningCode,
     TotalMetricRequest,
     TotalMetricResponse,
 )
@@ -100,6 +101,11 @@ def fetch_total_metric_tool(request: TotalMetricRequest) -> TotalMetricResponse:
         raise ValueError(f"unsupported metric: {request.metric}")
 
     day_count = Decimal(day_count_int)
+    warnings = [ToolWarningCode.SYNTHETIC_DATA]
+    if day_count_int == 1:
+        warnings.append(ToolWarningCode.SINGLE_DAY_WINDOW)
+    if day_count_int > 30:
+        warnings.append(ToolWarningCode.LARGE_DATE_RANGE_SYNTHETIC)
 
     base_metrics = {
         request.metric.value: quantize_decimal(total_value),
@@ -111,6 +117,7 @@ def fetch_total_metric_tool(request: TotalMetricRequest) -> TotalMetricResponse:
         date_to=request.date_to,
         value=quantize_decimal(total_value),
         base_metrics=base_metrics,
+        warnings=warnings,
     )
 
 
@@ -137,6 +144,7 @@ def fetch_breakdown_tool(request: BreakdownRequest) -> BreakdownResponse:
         date_to=request.date_to,
         items=items,
         total_value=quantize_decimal(total_value),
+        warnings=[ToolWarningCode.SYNTHETIC_DATA],
     )
 
 
@@ -148,10 +156,14 @@ def fetch_timeseries_tool(request: TimeseriesRequest) -> TimeseriesResponse:
         )
         for index, day in enumerate(_daterange(request.date_from, request.date_to))
     ]
+    warnings = [ToolWarningCode.SYNTHETIC_DATA]
+    if len(points) < 2:
+        warnings.append(ToolWarningCode.INSUFFICIENT_POINTS)
     return TimeseriesResponse(
         metric=request.metric,
         dimension=request.dimension,
         date_from=request.date_from,
         date_to=request.date_to,
         points=points,
+        warnings=warnings,
     )

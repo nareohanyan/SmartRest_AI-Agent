@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from decimal import Decimal
+from time import perf_counter
 from typing import Any
 
 from langgraph.graph import END, StateGraph
@@ -20,21 +21,18 @@ from app.agent.llm import (
 from app.agent.metrics_mapper import map_report_response_to_base_metrics
 from app.agent.planning import plan_analysis as deterministic_plan_analysis
 from app.agent.planning_policy import evaluate_plan_policy
-from app.agent.report_tools import resolve_scope_tool, run_report_tool
-from app.agent.tools import (
-    attach_breakdown_share_tool,
-    bottom_k_tool,
-    compute_scalar_metrics_tool,
-    fetch_breakdown_tool,
-    fetch_timeseries_tool,
-    fetch_total_metric_tool,
-    materialize_previous_period_metrics,
-    moving_average_tool,
-    top_k_tool,
-    trend_slope_tool,
-)
+from app.agent.tool_registry import ToolId, get_tool_registry
+from app.agent.tools.analytics import materialize_previous_period_metrics
 from app.core.config import get_settings
-from app.schemas.agent import AgentState, IntentType, PlannerSource, PolicyRoute, RunStatus
+from app.schemas.agent import (
+    AgentState,
+    ExecutionStepStatus,
+    ExecutionTraceStep,
+    IntentType,
+    PlannerSource,
+    PolicyRoute,
+    RunStatus,
+)
 from app.schemas.analysis import (
     AnalysisIntent,
     BreakdownRequest,
@@ -42,6 +40,7 @@ from app.schemas.analysis import (
     MovingAverageRequest,
     RankItemsRequest,
     TimeseriesRequest,
+    ToolWarningCode,
     TotalMetricRequest,
     TrendSlopeRequest,
 )
@@ -157,20 +156,73 @@ def _merge_warnings(*warning_groups: list[str]) -> list[str]:
     return merged
 
 
+def _stringify_tool_warnings(warnings: list[ToolWarningCode]) -> list[str]:
+    return [f"tool:{warning.value}" for warning in warnings]
+
+
+def _append_tool_trace_step(
+    trace: list[ExecutionTraceStep],
+    *,
+    step_id: str,
+    input_ref: str,
+    output_ref: str,
+    started_at: float,
+    status: ExecutionStepStatus = ExecutionStepStatus.SUCCESS,
+    warnings: list[str] | None = None,
+    error_code: str | None = None,
+) -> list[ExecutionTraceStep]:
+    return [
+        *trace,
+        ExecutionTraceStep(
+            step_id=step_id,
+            status=status,
+            input_ref=input_ref,
+            output_ref=output_ref,
+            duration_ms=(perf_counter() - started_at) * 1000,
+            warnings=warnings or [],
+            error_code=error_code,
+        ),
+    ]
+
+
 def _resolve_scope_node(state: AgentState) -> dict[str, Any]:
     if state.scope_request is None:
+        started_at = perf_counter()
+        execution_trace = _append_tool_trace_step(
+            state.execution_trace,
+            step_id="tool.resolve_scope",
+            input_ref="scope_request",
+            output_ref="user_scope",
+            started_at=started_at,
+            status=ExecutionStepStatus.FAILED,
+            warnings=["missing_scope_request"],
+            error_code="missing_scope_request",
+        )
         return {
             "status": RunStatus.DENIED,
             "final_answer": "Access denied: missing scope request.",
             "warnings": [*state.warnings, "missing_scope_request"],
             "policy_route": PolicyRoute.REJECT,
             "policy_reason": "Scope request is missing.",
+            "execution_trace": execution_trace,
         }
 
-    scope_response = resolve_scope_tool(state.scope_request)
+    started_at = perf_counter()
+    scope_response = get_tool_registry().invoke(ToolId.RESOLVE_SCOPE, state.scope_request)
+    execution_trace = _append_tool_trace_step(
+        state.execution_trace,
+        step_id="tool.resolve_scope",
+        input_ref="scope_request",
+        output_ref="user_scope",
+        started_at=started_at,
+    )
     tool_responses = state.tool_responses.model_copy(deep=True)
     tool_responses.resolve_scope = scope_response
-    return {"user_scope": scope_response, "tool_responses": tool_responses}
+    return {
+        "user_scope": scope_response,
+        "tool_responses": tool_responses,
+        "execution_trace": execution_trace,
+    }
 
 
 def _plan_analysis_with_llm(question: str) -> tuple[Any, float]:
@@ -303,10 +355,22 @@ def _prepare_legacy_report_node(state: AgentState) -> dict[str, Any]:
 
 def _run_report_node(state: AgentState) -> dict[str, Any]:
     if state.scope_request is None or state.selected_report_id is None or state.filters is None:
+        started_at = perf_counter()
+        execution_trace = _append_tool_trace_step(
+            state.execution_trace,
+            step_id="tool.run_report",
+            input_ref="run_report_request",
+            output_ref="run_report_response",
+            started_at=started_at,
+            status=ExecutionStepStatus.FAILED,
+            warnings=["run_report_missing_context"],
+            error_code="run_report_missing_context",
+        )
         return {
             "status": RunStatus.FAILED,
             "final_answer": "Run failed: missing required report execution context.",
             "warnings": [*state.warnings, "run_report_missing_context"],
+            "execution_trace": execution_trace,
         }
 
     run_request = RunReportRequest(
@@ -318,13 +382,23 @@ def _run_report_node(state: AgentState) -> dict[str, Any]:
             filters=state.filters,
         ),
     )
-    run_response = run_report_tool(run_request)
+    started_at = perf_counter()
+    run_response = get_tool_registry().invoke(ToolId.RUN_REPORT, run_request)
+    execution_trace = _append_tool_trace_step(
+        state.execution_trace,
+        step_id="tool.run_report",
+        input_ref="run_report_request",
+        output_ref="run_report_response",
+        started_at=started_at,
+        warnings=run_response.warnings,
+    )
 
     tool_responses = state.tool_responses.model_copy(deep=True)
     tool_responses.run_report = run_response
     return {
         "tool_responses": tool_responses,
         "warnings": [*state.warnings, *run_response.warnings],
+        "execution_trace": execution_trace,
     }
 
 
@@ -361,13 +435,22 @@ def _calc_metrics_node(state: AgentState) -> dict[str, Any]:
         base_metrics=base_metrics,
         calculations=calculation_specs,
     )
-    response = compute_scalar_metrics_tool(request)
+    started_at = perf_counter()
+    response = get_tool_registry().invoke(ToolId.COMPUTE_SCALAR_METRICS, request)
+    execution_trace = _append_tool_trace_step(
+        state.execution_trace,
+        step_id="tool.compute_scalar_metrics",
+        input_ref="compute_metrics_request",
+        output_ref="compute_metrics_response",
+        started_at=started_at,
+    )
     calc_warning_strings = [f"calc:{warning.value}" for warning in response.warnings]
     return {
         "base_metrics": base_metrics,
         "derived_metrics": response.derived_metrics,
         "calc_warnings": response.warnings,
         "warnings": [*state.warnings, *calc_warning_strings],
+        "execution_trace": execution_trace,
     }
 
 
@@ -380,19 +463,39 @@ def _run_comparison_node(state: AgentState) -> dict[str, Any]:
             "warnings": [*state.warnings, "comparison_missing_context"],
         }
 
-    current = fetch_total_metric_tool(
-        TotalMetricRequest(
-            metric=plan.retrieval.metric,
-            date_from=plan.retrieval.date_from,
-            date_to=plan.retrieval.date_to,
-        )
+    tool_registry = get_tool_registry()
+    execution_trace = state.execution_trace
+
+    current_request = TotalMetricRequest(
+        metric=plan.retrieval.metric,
+        date_from=plan.retrieval.date_from,
+        date_to=plan.retrieval.date_to,
     )
-    previous = fetch_total_metric_tool(
-        TotalMetricRequest(
-            metric=plan.previous_period_retrieval.metric,
-            date_from=plan.previous_period_retrieval.date_from,
-            date_to=plan.previous_period_retrieval.date_to,
-        )
+    current_started_at = perf_counter()
+    current = tool_registry.invoke(ToolId.FETCH_TOTAL_METRIC, current_request)
+    execution_trace = _append_tool_trace_step(
+        execution_trace,
+        step_id="tool.fetch_total_metric.current",
+        input_ref="analysis_plan.retrieval",
+        output_ref="total_metric.current",
+        started_at=current_started_at,
+        warnings=_stringify_tool_warnings(current.warnings),
+    )
+
+    previous_request = TotalMetricRequest(
+        metric=plan.previous_period_retrieval.metric,
+        date_from=plan.previous_period_retrieval.date_from,
+        date_to=plan.previous_period_retrieval.date_to,
+    )
+    previous_started_at = perf_counter()
+    previous = tool_registry.invoke(ToolId.FETCH_TOTAL_METRIC, previous_request)
+    execution_trace = _append_tool_trace_step(
+        execution_trace,
+        step_id="tool.fetch_total_metric.previous",
+        input_ref="analysis_plan.previous_period_retrieval",
+        output_ref="total_metric.previous",
+        started_at=previous_started_at,
+        warnings=_stringify_tool_warnings(previous.warnings),
     )
     day_count = current.base_metrics.get("day_count", Decimal("0"))
     base_metrics = materialize_previous_period_metrics(
@@ -403,11 +506,18 @@ def _run_comparison_node(state: AgentState) -> dict[str, Any]:
     )
 
     if plan.scalar_calculations:
-        calc_response = compute_scalar_metrics_tool(
-            ComputeMetricsRequest(
-                base_metrics=base_metrics,
-                calculations=plan.scalar_calculations,
-            )
+        calc_request = ComputeMetricsRequest(
+            base_metrics=base_metrics,
+            calculations=plan.scalar_calculations,
+        )
+        calc_started_at = perf_counter()
+        calc_response = tool_registry.invoke(ToolId.COMPUTE_SCALAR_METRICS, calc_request)
+        execution_trace = _append_tool_trace_step(
+            execution_trace,
+            step_id="tool.compute_scalar_metrics.comparison",
+            input_ref="comparison.base_metrics",
+            output_ref="comparison.derived_metrics",
+            started_at=calc_started_at,
         )
         derived_metrics = calc_response.derived_metrics
         calc_warnings = calc_response.warnings
@@ -445,10 +555,11 @@ def _run_comparison_node(state: AgentState) -> dict[str, Any]:
         },
         "warnings": _merge_warnings(
             state.warnings,
-            current.warnings,
-            previous.warnings,
+            _stringify_tool_warnings(current.warnings),
+            _stringify_tool_warnings(previous.warnings),
             calc_warning_strings,
         ),
+        "execution_trace": execution_trace,
     }
 
 
@@ -461,23 +572,53 @@ def _run_ranking_node(state: AgentState) -> dict[str, Any]:
             "warnings": [*state.warnings, "ranking_missing_context"],
         }
 
-    breakdown = fetch_breakdown_tool(
-        BreakdownRequest(
-            metric=plan.retrieval.metric,
-            dimension=DimensionName.SOURCE,
-            date_from=plan.retrieval.date_from,
-            date_to=plan.retrieval.date_to,
-        )
+    tool_registry = get_tool_registry()
+    execution_trace = state.execution_trace
+
+    breakdown_request = BreakdownRequest(
+        metric=plan.retrieval.metric,
+        dimension=DimensionName.SOURCE,
+        date_from=plan.retrieval.date_from,
+        date_to=plan.retrieval.date_to,
     )
-    enriched = attach_breakdown_share_tool(breakdown)
+    breakdown_started_at = perf_counter()
+    breakdown = tool_registry.invoke(ToolId.FETCH_BREAKDOWN, breakdown_request)
+    execution_trace = _append_tool_trace_step(
+        execution_trace,
+        step_id="tool.fetch_breakdown",
+        input_ref="analysis_plan.retrieval",
+        output_ref="breakdown_response",
+        started_at=breakdown_started_at,
+        warnings=_stringify_tool_warnings(breakdown.warnings),
+    )
+    attach_share_started_at = perf_counter()
+    enriched = tool_registry.invoke(ToolId.ATTACH_BREAKDOWN_SHARE, breakdown)
+    execution_trace = _append_tool_trace_step(
+        execution_trace,
+        step_id="tool.attach_breakdown_share",
+        input_ref="breakdown_response",
+        output_ref="breakdown_response_enriched",
+        started_at=attach_share_started_at,
+        warnings=_stringify_tool_warnings(enriched.warnings),
+    )
 
     ranked_items = enriched.items
     if plan.ranking is not None:
         rank_request = RankItemsRequest(items=enriched.items, ranking=plan.ranking)
+        ranking_started_at = perf_counter()
         if plan.ranking.mode.value == "top_k":
-            ranked_items = top_k_tool(rank_request).items
+            ranked_items = tool_registry.invoke(ToolId.TOP_K, rank_request).items
+            rank_step_id = "tool.top_k"
         else:
-            ranked_items = bottom_k_tool(rank_request).items
+            ranked_items = tool_registry.invoke(ToolId.BOTTOM_K, rank_request).items
+            rank_step_id = "tool.bottom_k"
+        execution_trace = _append_tool_trace_step(
+            execution_trace,
+            step_id=rank_step_id,
+            input_ref="ranking_request",
+            output_ref="ranked_items",
+            started_at=ranking_started_at,
+        )
 
     summary_items = ", ".join(
         f"{item.label}={item.value:.2f}" for item in ranked_items
@@ -493,7 +634,11 @@ def _run_ranking_node(state: AgentState) -> dict[str, Any]:
             "kind": "ranking",
             "summary": summary,
         },
-        "warnings": [*state.warnings, *breakdown.warnings],
+        "warnings": [
+            *state.warnings,
+            *_stringify_tool_warnings(enriched.warnings),
+        ],
+        "execution_trace": execution_trace,
     }
 
 
@@ -506,13 +651,23 @@ def _run_trend_node(state: AgentState) -> dict[str, Any]:
             "warnings": [*state.warnings, "trend_missing_context"],
         }
 
-    timeseries = fetch_timeseries_tool(
-        TimeseriesRequest(
-            metric=plan.retrieval.metric,
-            date_from=plan.retrieval.date_from,
-            date_to=plan.retrieval.date_to,
-            dimension=DimensionName.DAY,
-        )
+    tool_registry = get_tool_registry()
+    execution_trace = state.execution_trace
+    timeseries_request = TimeseriesRequest(
+        metric=plan.retrieval.metric,
+        date_from=plan.retrieval.date_from,
+        date_to=plan.retrieval.date_to,
+        dimension=DimensionName.DAY,
+    )
+    timeseries_started_at = perf_counter()
+    timeseries = tool_registry.invoke(ToolId.FETCH_TIMESERIES, timeseries_request)
+    execution_trace = _append_tool_trace_step(
+        execution_trace,
+        step_id="tool.fetch_timeseries",
+        input_ref="analysis_plan.retrieval",
+        output_ref="timeseries_response",
+        started_at=timeseries_started_at,
+        warnings=_stringify_tool_warnings(timeseries.warnings),
     )
 
     summary_parts = [
@@ -523,11 +678,19 @@ def _run_trend_node(state: AgentState) -> dict[str, Any]:
     ]
 
     if plan.include_moving_average and len(timeseries.points) >= plan.moving_average_window:
-        moving_average = moving_average_tool(
-            MovingAverageRequest(
-                points=timeseries.points,
-                window_size=plan.moving_average_window,
-            )
+        moving_average_request = MovingAverageRequest(
+            points=timeseries.points,
+            window_size=plan.moving_average_window,
+        )
+        moving_average_started_at = perf_counter()
+        moving_average = tool_registry.invoke(ToolId.MOVING_AVERAGE, moving_average_request)
+        execution_trace = _append_tool_trace_step(
+            execution_trace,
+            step_id="tool.moving_average",
+            input_ref="moving_average_request",
+            output_ref="moving_average_response",
+            started_at=moving_average_started_at,
+            warnings=_stringify_tool_warnings(moving_average.warnings),
         )
         latest_ma = next(
             (point.value for point in reversed(moving_average.points) if point.value),
@@ -540,7 +703,17 @@ def _run_trend_node(state: AgentState) -> dict[str, Any]:
 
     if plan.include_trend_slope:
         if len(timeseries.points) >= 2:
-            slope = trend_slope_tool(TrendSlopeRequest(points=timeseries.points))
+            trend_slope_request = TrendSlopeRequest(points=timeseries.points)
+            trend_slope_started_at = perf_counter()
+            slope = tool_registry.invoke(ToolId.TREND_SLOPE, trend_slope_request)
+            execution_trace = _append_tool_trace_step(
+                execution_trace,
+                step_id="tool.trend_slope",
+                input_ref="trend_slope_request",
+                output_ref="trend_slope_response",
+                started_at=trend_slope_started_at,
+                warnings=_stringify_tool_warnings(slope.warnings),
+            )
             summary_parts.append(
                 f"Slope per day: {slope.slope_per_day:.4f} ({slope.direction})."
             )
@@ -553,7 +726,8 @@ def _run_trend_node(state: AgentState) -> dict[str, Any]:
             "kind": "trend",
             "summary": " ".join(summary_parts),
         },
-        "warnings": [*state.warnings, *timeseries.warnings],
+        "warnings": [*state.warnings, *_stringify_tool_warnings(timeseries.warnings)],
+        "execution_trace": execution_trace,
     }
 
 

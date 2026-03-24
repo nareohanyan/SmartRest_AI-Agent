@@ -152,6 +152,15 @@ def test_ru_comparison_routes_to_dynamic_comparison_path() -> None:
     assert final_state.status is RunStatus.COMPLETED
     assert final_state.policy_route is not None
     assert final_state.policy_route.value == "run_comparison"
+    trace_step_ids = [step.step_id for step in final_state.execution_trace]
+    assert trace_step_ids == [
+        "tool.resolve_scope",
+        "tool.fetch_total_metric.current",
+        "tool.fetch_total_metric.previous",
+        "tool.compute_scalar_metrics.comparison",
+    ]
+    assert all(step.status.value == "success" for step in final_state.execution_trace)
+    assert "tool:synthetic_data" in final_state.warnings
 
 
 def test_missing_date_routes_to_clarify() -> None:

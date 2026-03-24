@@ -39,6 +39,14 @@ class AnalysisIntent(str, Enum):
     UNSUPPORTED = "unsupported"
 
 
+class ToolWarningCode(str, Enum):
+    SYNTHETIC_DATA = "synthetic_data"
+    SINGLE_DAY_WINDOW = "single_day_window"
+    LARGE_DATE_RANGE_SYNTHETIC = "large_date_range_synthetic"
+    INSUFFICIENT_POINTS = "insufficient_points"
+    ZERO_TOTAL_NO_SHARE = "zero_total_no_share"
+
+
 class SortDirection(str, Enum):
     DESC = "desc"
     ASC = "asc"
@@ -127,7 +135,7 @@ class TotalMetricResponse(SchemaModel):
     date_to: date
     value: Decimal
     base_metrics: dict[str, Decimal] = Field(default_factory=dict)
-    warnings: list[str] = Field(default_factory=list)
+    warnings: list[ToolWarningCode] = Field(default_factory=list)
 
 
 class BreakdownItem(SchemaModel):
@@ -150,7 +158,7 @@ class BreakdownResponse(SchemaModel):
     date_to: date
     items: list[BreakdownItem] = Field(default_factory=list)
     total_value: Decimal
-    warnings: list[str] = Field(default_factory=list)
+    warnings: list[ToolWarningCode] = Field(default_factory=list)
 
 
 class TimeseriesPoint(SchemaModel):
@@ -171,7 +179,7 @@ class TimeseriesResponse(SchemaModel):
     date_from: date
     date_to: date
     points: list[TimeseriesPoint] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
+    warnings: list[ToolWarningCode] = Field(default_factory=list)
 
 
 class MovingAveragePoint(SchemaModel):
@@ -192,6 +200,7 @@ class MovingAverageRequest(SchemaModel):
 
 class MovingAverageResponse(SchemaModel):
     points: list[MovingAveragePoint] = Field(default_factory=list)
+    warnings: list[ToolWarningCode] = Field(default_factory=list)
 
 
 class TrendSlopeRequest(SchemaModel):
@@ -201,6 +210,7 @@ class TrendSlopeRequest(SchemaModel):
 class TrendSlopeResponse(SchemaModel):
     slope_per_day: Decimal
     direction: Literal["up", "down", "flat"]
+    warnings: list[ToolWarningCode] = Field(default_factory=list)
 
 
 class RankItemsRequest(SchemaModel):

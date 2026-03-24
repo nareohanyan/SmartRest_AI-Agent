@@ -55,6 +55,26 @@ class PolicyRoute(str, Enum):
     SAFE_ANSWER = "safe_answer"
 
 
+class ExecutionStepStatus(str, Enum):
+    SUCCESS = "success"
+    FAILED = "failed"
+
+
+class ExecutionStepType(str, Enum):
+    TOOL = "tool"
+
+
+class ExecutionTraceStep(SchemaModel):
+    step_id: str = Field(min_length=1)
+    step_type: ExecutionStepType = ExecutionStepType.TOOL
+    status: ExecutionStepStatus
+    input_ref: str | None = None
+    output_ref: str | None = None
+    duration_ms: float = Field(ge=0.0)
+    warnings: list[str] = Field(default_factory=list)
+    error_code: str | None = None
+
+
 class ToolResponses(SchemaModel):
     resolve_scope: ResolveScopeResponse | None = None
     list_reports: ListReportsResponse | None = None
@@ -80,6 +100,7 @@ class AgentState(SchemaModel):
     clarification_question: str | None = None
     tool_responses: ToolResponses = Field(default_factory=ToolResponses)
     analysis_artifacts: dict[str, Any] = Field(default_factory=dict)
+    execution_trace: list[ExecutionTraceStep] = Field(default_factory=list)
     base_metrics: dict[str, Decimal] = Field(default_factory=dict)
     derived_metrics: list[DerivedMetric] = Field(default_factory=list)
     calc_warnings: list[CalculationWarningCode] = Field(default_factory=list)

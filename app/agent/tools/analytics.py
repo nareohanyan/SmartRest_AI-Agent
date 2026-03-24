@@ -12,6 +12,7 @@ from app.schemas.analysis import (
     MovingAverageRequest,
     MovingAverageResponse,
     TimeseriesPoint,
+    ToolWarningCode,
     TrendSlopeRequest,
     TrendSlopeResponse,
 )
@@ -29,7 +30,8 @@ def compute_scalar_metrics_tool(request: ComputeMetricsRequest) -> ComputeMetric
 
 def attach_breakdown_share_tool(response: BreakdownResponse) -> BreakdownResponse:
     if response.total_value == 0:
-        return response
+        warnings = [*response.warnings, ToolWarningCode.ZERO_TOTAL_NO_SHARE]
+        return response.model_copy(update={"warnings": warnings})
 
     enriched_items = []
     for item in response.items:
@@ -53,7 +55,7 @@ def moving_average_tool(request: MovingAverageRequest) -> MovingAverageResponse:
         average = quantize_decimal(window_sum / Decimal(request.window_size))
         output.append(MovingAveragePoint(bucket=point.bucket, value=average))
 
-    return MovingAverageResponse(points=output)
+    return MovingAverageResponse(points=output, warnings=[])
 
 
 def trend_slope_tool(request: TrendSlopeRequest) -> TrendSlopeResponse:
@@ -69,7 +71,11 @@ def trend_slope_tool(request: TrendSlopeRequest) -> TrendSlopeResponse:
     else:
         direction = "flat"
 
-    return TrendSlopeResponse(slope_per_day=slope, direction=direction)
+    return TrendSlopeResponse(
+        slope_per_day=slope,
+        direction=direction,
+        warnings=[],
+    )
 
 
 def materialize_previous_period_metrics(
