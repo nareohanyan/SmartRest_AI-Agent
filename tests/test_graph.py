@@ -13,7 +13,7 @@ import app.agent.graph as graph_module
 from app.agent.graph import _reject_node, build_agent_graph
 from app.agent.llm.exceptions import LLMClientError
 from app.agent.tool_registry import ToolId
-from app.schemas.agent import AgentState, LLMErrorCategory, RunStatus
+from app.schemas.agent import AgentState, LLMErrorCategory, PolicyRoute, RunStatus
 from app.schemas.analysis import DimensionName, MetricName
 from app.schemas.reports import ReportType
 from app.schemas.tools import AccessStatus, ToolOperation
@@ -218,6 +218,60 @@ def test_ru_comparison_routes_to_dynamic_comparison_path() -> None:
     ]
     assert all(step.status.value == "success" for step in final_state.execution_trace)
     assert "tool:synthetic_data" in final_state.warnings
+
+
+def test_compound_kpi_request_routes_to_multi_report_path() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state(
+        "What were total sales and order count 2026-03-01 to 2026-03-07?"
+    )
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "plan_analysis",
+        "policy_gate",
+        "route_decision",
+        "run_multi_report",
+        "compose_answer",
+    ]
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.policy_route is PolicyRoute.RUN_MULTI_REPORT
+    assert len(final_state.legacy_task_results) == 2
+    assert all(result.status == "completed" for result in final_state.legacy_task_results)
+    assert "Total sales from 2026-03-01 to 2026-03-07 were 12345.67." in (
+        final_state.final_answer or ""
+    )
+    assert "Order count from 2026-03-01 to 2026-03-07 was 345.00." in (
+        final_state.final_answer or ""
+    )
+
+
+def test_compound_request_returns_partial_success_for_unsupported_task() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state(
+        "What were total sales this month and how many couriers did delivery this month?"
+    )
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "plan_analysis",
+        "policy_gate",
+        "route_decision",
+        "run_multi_report",
+        "compose_answer",
+    ]
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.policy_route is PolicyRoute.RUN_MULTI_REPORT
+    assert any(result.status == "completed" for result in final_state.legacy_task_results)
+    assert any(result.status == "unsupported" for result in final_state.legacy_task_results)
+    assert "planner_partial_multi_task" in final_state.warnings
+    assert "I couldn't answer" in (final_state.final_answer or "")
 
 
 def test_missing_date_routes_to_clarify() -> None:

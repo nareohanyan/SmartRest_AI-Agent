@@ -7,7 +7,7 @@ from uuid import UUID
 
 from pydantic import Field, model_validator
 
-from app.schemas.analysis import AnalysisPlan
+from app.schemas.analysis import AnalysisPlan, LegacyReportTask, LegacyReportTaskResult
 from app.schemas.base import SchemaModel
 from app.schemas.calculations import CalculationWarningCode, DerivedMetric
 from app.schemas.reports import ReportFilters, ReportType
@@ -46,6 +46,7 @@ class PlannerSource(str, Enum):
 
 class PolicyRoute(str, Enum):
     PREPARE_LEGACY_REPORT = "prepare_legacy_report"
+    RUN_MULTI_REPORT = "run_multi_report"
     RUN_COMPARISON = "run_comparison"
     RUN_RANKING = "run_ranking"
     RUN_TREND = "run_trend"
@@ -90,6 +91,8 @@ class AgentState(SchemaModel):
     user_scope: ResolveScopeResponse | None = None
     intent: IntentType | None = None
     analysis_plan: AnalysisPlan | None = None
+    legacy_tasks: list[LegacyReportTask] = Field(default_factory=list)
+    legacy_task_results: list[LegacyReportTaskResult] = Field(default_factory=list)
     plan_source: PlannerSource | None = None
     plan_confidence: float | None = None
     policy_route: PolicyRoute | None = None

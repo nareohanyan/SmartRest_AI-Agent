@@ -9,6 +9,7 @@ from app.schemas.analysis import (
     AnalysisIntent,
     AnalysisPlan,
     DimensionName,
+    LegacyReportTask,
     MetricName,
     RankingMode,
     RankingSpec,
@@ -21,6 +22,7 @@ from app.schemas.calculations import (
     PercentChangeCalculationSpec,
     PerDayRateCalculationSpec,
 )
+from app.schemas.reports import ReportType
 
 _DATE_RANGE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})\s*(?:to|-)\s*(\d{4}-\d{2}-\d{2})")
 _ARMENIAN_CHAR_RE = re.compile(r"[\u0531-\u058F]")
@@ -28,6 +30,7 @@ _CYRILLIC_CHAR_RE = re.compile(r"[\u0400-\u04FF]")
 _SMALLTALK_TRAILING_PUNCT_RE = re.compile(r"[!?.…]+$")
 _SMALLTALK_TOKEN_NORMALIZE_RE = re.compile(r"[^\w\s'’]+")
 _TEXT_TOKEN_NORMALIZE_RE = re.compile(r"[^\w\s'’-]+")
+_MULTI_TASK_SPLIT_RE = re.compile(r"\s+(?:and|և|и)\s+", re.IGNORECASE)
 _PLANNER_LEXICON = get_planner_lexicon()
 
 
@@ -227,6 +230,89 @@ def _detect_dimension(question: str) -> DimensionName | None:
         except ValueError:
             continue
     return None
+
+
+def _map_metric_to_legacy_report(metric: MetricName) -> ReportType | None:
+    if metric is MetricName.SALES_TOTAL:
+        return ReportType.SALES_TOTAL
+    if metric is MetricName.ORDER_COUNT:
+        return ReportType.ORDER_COUNT
+    if metric is MetricName.AVERAGE_CHECK:
+        return ReportType.AVERAGE_CHECK
+    return None
+
+
+def plan_legacy_tasks(question: str) -> list[LegacyReportTask] | None:
+    normalized = _normalize_text(question)
+    if not normalized or _is_smalltalk(question):
+        return None
+
+    if _needs_ranking(question) is not None or _needs_breakdown(question):
+        return None
+
+    if _has_any_phrase(normalized, _PLANNER_LEXICON.comparison_terms):
+        return None
+
+    if _has_any_phrase(normalized, _PLANNER_LEXICON.trend_terms):
+        return None
+
+    if _MULTI_TASK_SPLIT_RE.search(question) is None:
+        return None
+
+    date_range = _parse_date_range(question)
+    if date_range is None:
+        return None
+
+    raw_parts = [
+        part.strip(" ,.?")
+        for part in _MULTI_TASK_SPLIT_RE.split(question)
+        if part.strip()
+    ]
+    if len(raw_parts) < 2:
+        return None
+
+    tasks: list[LegacyReportTask] = []
+    for index, part in enumerate(raw_parts, start=1):
+        metric = _detect_metric(part)
+        if metric is None:
+            tasks.append(
+                LegacyReportTask(
+                    task_id=f"task_{index}",
+                    user_subquery=part,
+                    supported=False,
+                    reason="unsupported_metric",
+                )
+            )
+            continue
+
+        report_id = _map_metric_to_legacy_report(metric)
+        if report_id is None:
+            tasks.append(
+                LegacyReportTask(
+                    task_id=f"task_{index}",
+                    user_subquery=part,
+                    metric=metric,
+                    supported=False,
+                    reason="unsupported_metric",
+                )
+            )
+            continue
+
+        tasks.append(
+            LegacyReportTask(
+                task_id=f"task_{index}",
+                user_subquery=part,
+                metric=metric,
+                date_from=date_range[0],
+                date_to=date_range[1],
+                report_id=report_id,
+            )
+        )
+
+    supported_count = sum(1 for task in tasks if task.supported)
+    if supported_count == 0 or len(tasks) < 2:
+        return None
+    return tasks
 
 
 def _needs_breakdown(question: str) -> bool:

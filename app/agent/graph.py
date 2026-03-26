@@ -19,7 +19,12 @@ from app.agent.llm import (
     parse_plan_output_json,
 )
 from app.agent.metrics_mapper import map_report_response_to_base_metrics
-from app.agent.planning import plan_analysis as deterministic_plan_analysis
+from app.agent.planning import (
+    plan_analysis as deterministic_plan_analysis,
+)
+from app.agent.planning import (
+    plan_legacy_tasks,
+)
 from app.agent.planning_policy import evaluate_plan_policy
 from app.agent.tool_registry import ToolId, get_tool_registry
 from app.agent.tools.analytics import materialize_previous_period_metrics
@@ -37,6 +42,8 @@ from app.schemas.analysis import (
     AnalysisIntent,
     BreakdownRequest,
     DimensionName,
+    LegacyReportTask,
+    LegacyReportTaskResult,
     MovingAverageRequest,
     RankItemsRequest,
     TimeseriesRequest,
@@ -45,7 +52,7 @@ from app.schemas.analysis import (
     TrendSlopeRequest,
 )
 from app.schemas.calculations import ComputeMetricsRequest
-from app.schemas.reports import ReportRequest
+from app.schemas.reports import ReportFilters, ReportRequest, ReportType
 from app.schemas.tools import AccessStatus, RunReportRequest
 
 _ARMENIAN_CHAR_RE = re.compile(r"[\u0531-\u058F]")
@@ -237,10 +244,24 @@ def _plan_analysis_node(state: AgentState) -> dict[str, Any]:
     settings = get_settings()
     allow_fallback = settings.planner_mode != "llm" or settings.planner_fallback_enabled
 
+    planned_tasks = plan_legacy_tasks(state.user_question)
+    if planned_tasks is not None:
+        return {
+            "legacy_tasks": planned_tasks,
+            "analysis_plan": None,
+            "plan_source": PlannerSource.DETERMINISTIC,
+            "plan_confidence": None,
+            "intent": IntentType.GET_KPI,
+            "needs_clarification": False,
+            "clarification_question": None,
+            "warnings": state.warnings,
+        }
+
     preplanned = deterministic_plan_analysis(state.user_question)
     if preplanned.intent is AnalysisIntent.SMALLTALK:
         return {
             "analysis_plan": preplanned,
+            "legacy_tasks": [],
             "plan_source": PlannerSource.DETERMINISTIC,
             "plan_confidence": None,
             "intent": _map_analysis_intent_to_runtime_intent(preplanned.intent),
@@ -290,6 +311,7 @@ def _plan_analysis_node(state: AgentState) -> dict[str, Any]:
 
     return {
         "analysis_plan": plan,
+        "legacy_tasks": [],
         "plan_source": plan_source,
         "plan_confidence": plan_confidence,
         "intent": _map_analysis_intent_to_runtime_intent(plan.intent),
@@ -300,6 +322,51 @@ def _plan_analysis_node(state: AgentState) -> dict[str, Any]:
 
 
 def _policy_gate_node(state: AgentState) -> dict[str, Any]:
+    if state.legacy_tasks:
+        if state.user_scope is None:
+            return {
+                "policy_route": PolicyRoute.REJECT,
+                "policy_reason": "Scope is missing.",
+                "warnings": [*state.warnings, "policy:missing_scope"],
+            }
+
+        if state.user_scope.status is AccessStatus.DENIED:
+            return {
+                "policy_route": PolicyRoute.REJECT,
+                "policy_reason": state.user_scope.denial_reason or "Access denied.",
+                "warnings": [*state.warnings, "policy:access_denied"],
+            }
+
+        unsupported_tasks = [
+            task for task in state.legacy_tasks if not task.supported or task.report_id is None
+        ]
+        blocked_report = next(
+            (
+                task.report_id
+                for task in state.legacy_tasks
+                if task.supported
+                and task.report_id is not None
+                and task.report_id not in state.user_scope.allowed_report_ids
+            ),
+            None,
+        )
+        if blocked_report is not None:
+            return {
+                "policy_route": PolicyRoute.REJECT,
+                "policy_reason": f"Report {blocked_report.value} is not allowed for this scope.",
+                "warnings": [*state.warnings, "policy:report_not_allowed"],
+            }
+
+        warnings = state.warnings
+        if unsupported_tasks:
+            warnings = [*warnings, "planner_partial_multi_task"]
+
+        return {
+            "policy_route": PolicyRoute.RUN_MULTI_REPORT,
+            "policy_reason": "Compound KPI request routed to multi-report execution.",
+            "warnings": warnings,
+        }
+
     plan = state.analysis_plan
     if plan is None:
         return {
@@ -418,6 +485,187 @@ def _run_report_node(state: AgentState) -> dict[str, Any]:
     return {
         "tool_responses": tool_responses,
         "warnings": [*state.warnings, *run_response.warnings],
+        "execution_trace": execution_trace,
+    }
+
+
+def _format_metric_value(value: float) -> str:
+    return f"{value:.2f}"
+
+
+def _build_legacy_task_fragment(
+    *,
+    task: LegacyReportTask,
+    run_response: Any,
+    derived_metrics: dict[str, Decimal],
+) -> str:
+    report_id = run_response.result.report_id
+    date_from = run_response.result.filters.date_from
+    date_to = run_response.result.filters.date_to
+    metrics = {metric.label: metric.value for metric in run_response.result.metrics}
+
+    if report_id is ReportType.SALES_TOTAL:
+        sales_total = metrics.get("sales_total")
+        per_day = derived_metrics.get("sales_total_per_day")
+        if sales_total is not None:
+            fragment = (
+                f"Total sales from {date_from} to {date_to} were "
+                f"{_format_metric_value(sales_total)}."
+            )
+            if per_day is not None:
+                fragment = (
+                    f"{fragment} Average per day was {per_day:.2f}."
+                )
+            return fragment
+
+    if report_id is ReportType.ORDER_COUNT:
+        order_count = metrics.get("order_count")
+        per_day = derived_metrics.get("order_count_per_day")
+        if order_count is not None:
+            fragment = (
+                f"Order count from {date_from} to {date_to} was "
+                f"{_format_metric_value(order_count)}."
+            )
+            if per_day is not None:
+                fragment = f"{fragment} Average per day was {per_day:.2f}."
+            return fragment
+
+    if report_id is ReportType.AVERAGE_CHECK:
+        average_check = metrics.get("average_check")
+        if average_check is not None:
+            return (
+                f"Average check from {date_from} to {date_to} was "
+                f"{_format_metric_value(average_check)}."
+            )
+
+    metrics_text = ", ".join(
+        f"{metric.label}={metric.value:.2f}" for metric in run_response.result.metrics
+    )
+    return f"Report {report_id.value} for {date_from} to {date_to}: {metrics_text}."
+
+
+def _build_unsupported_task_fragment(task: LegacyReportTask) -> str:
+    return f"I couldn't answer '{task.user_subquery}' because that metric is not supported yet."
+
+
+def _run_multi_report_node(state: AgentState) -> dict[str, Any]:
+    if state.scope_request is None:
+        return {
+            "status": RunStatus.FAILED,
+            "final_answer": "Run failed: missing required report execution context.",
+            "warnings": [*state.warnings, "run_multi_report_missing_context"],
+        }
+
+    warnings = list(state.warnings)
+    execution_trace = list(state.execution_trace)
+    task_results: list[LegacyReportTaskResult] = []
+    summary_parts: list[str] = []
+
+    for task in state.legacy_tasks:
+        if (
+            not task.supported
+            or task.report_id is None
+            or task.date_from is None
+            or task.date_to is None
+        ):
+            fragment = _build_unsupported_task_fragment(task)
+            task_results.append(
+                LegacyReportTaskResult(
+                    task_id=task.task_id,
+                    status="unsupported",
+                    answer_fragment=fragment,
+                )
+            )
+            summary_parts.append(fragment)
+            continue
+
+        run_request = RunReportRequest(
+            user_id=state.scope_request.user_id,
+            profile_id=state.scope_request.profile_id,
+            profile_nick=state.scope_request.profile_nick,
+            request=ReportRequest(
+                report_id=task.report_id,
+                filters=ReportFilters(
+                    date_from=task.date_from,
+                    date_to=task.date_to,
+                ),
+            ),
+        )
+        started_at = perf_counter()
+        run_response = get_tool_registry().invoke(ToolId.RUN_REPORT, run_request)
+        execution_trace = _append_tool_trace_step(
+            execution_trace,
+            step_id=f"tool.run_report.{task.task_id}",
+            input_ref=f"legacy_tasks.{task.task_id}",
+            output_ref=f"run_report_response.{task.task_id}",
+            started_at=started_at,
+            warnings=run_response.warnings,
+        )
+        warnings = [*warnings, *run_response.warnings]
+
+        derived_metric_values: dict[str, Decimal] = {}
+        try:
+            base_metrics = map_report_response_to_base_metrics(run_response)
+            calc_specs = select_calculation_specs(task.report_id, state.intent, base_metrics)
+        except ValueError:
+            base_metrics = {}
+            calc_specs = []
+
+        if calc_specs:
+            calc_started_at = perf_counter()
+            calc_response = get_tool_registry().invoke(
+                ToolId.COMPUTE_SCALAR_METRICS,
+                ComputeMetricsRequest(
+                    base_metrics=base_metrics,
+                    calculations=calc_specs,
+                ),
+            )
+            execution_trace = _append_tool_trace_step(
+                execution_trace,
+                step_id=f"tool.compute_scalar_metrics.{task.task_id}",
+                input_ref=f"legacy_tasks.{task.task_id}",
+                output_ref=f"compute_metrics_response.{task.task_id}",
+                started_at=calc_started_at,
+            )
+            calc_warning_strings = [f"calc:{warning.value}" for warning in calc_response.warnings]
+            warnings = [*warnings, *calc_warning_strings]
+            derived_metric_values = {
+                metric.key: metric.value
+                for metric in calc_response.derived_metrics
+                if metric.value is not None
+            }
+
+        fragment = _build_legacy_task_fragment(
+            task=task,
+            run_response=run_response,
+            derived_metrics=derived_metric_values,
+        )
+        task_results.append(
+            LegacyReportTaskResult(
+                task_id=task.task_id,
+                status="completed",
+                answer_fragment=fragment,
+                warnings=run_response.warnings,
+            )
+        )
+        summary_parts.append(fragment)
+
+    if not any(result.status == "completed" for result in task_results):
+        return {
+            "status": RunStatus.FAILED,
+            "final_answer": "Run failed: no supported multi-report tasks were executed.",
+            "warnings": [*warnings, "run_multi_report_no_supported_tasks"],
+            "execution_trace": execution_trace,
+        }
+
+    return {
+        "legacy_task_results": task_results,
+        "analysis_artifacts": {
+            **state.analysis_artifacts,
+            "kind": "multi_report",
+            "summary": " ".join(summary_parts),
+        },
+        "warnings": warnings,
         "execution_trace": execution_trace,
     }
 
@@ -909,6 +1157,7 @@ def build_agent_graph() -> Any:
     graph.add_node("route_decision", _route_decision_node)
     graph.add_node("prepare_legacy_report", _prepare_legacy_report_node)
     graph.add_node("run_report", _run_report_node)
+    graph.add_node("run_multi_report", _run_multi_report_node)
     graph.add_node("calc_metrics", _calc_metrics_node)
     graph.add_node("run_comparison", _run_comparison_node)
     graph.add_node("run_ranking", _run_ranking_node)
@@ -928,6 +1177,7 @@ def build_agent_graph() -> Any:
         _select_next_route_from_policy,
         {
             PolicyRoute.PREPARE_LEGACY_REPORT.value: "prepare_legacy_report",
+            PolicyRoute.RUN_MULTI_REPORT.value: "run_multi_report",
             PolicyRoute.RUN_COMPARISON.value: "run_comparison",
             PolicyRoute.RUN_RANKING.value: "run_ranking",
             PolicyRoute.RUN_TREND.value: "run_trend",
@@ -939,6 +1189,7 @@ def build_agent_graph() -> Any:
     )
     graph.add_edge("prepare_legacy_report", "run_report")
     graph.add_edge("run_report", "calc_metrics")
+    graph.add_edge("run_multi_report", "compose_answer")
     graph.add_edge("calc_metrics", "compose_answer")
     graph.add_edge("run_comparison", "compose_answer")
     graph.add_edge("run_ranking", "compose_answer")

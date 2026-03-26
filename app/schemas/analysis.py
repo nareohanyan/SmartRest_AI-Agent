@@ -9,6 +9,7 @@ from pydantic import Field, model_validator
 
 from app.schemas.base import SchemaModel
 from app.schemas.calculations import CalculationSpec
+from app.schemas.reports import ReportType
 
 
 class MetricName(str, Enum):
@@ -234,3 +235,30 @@ class RankItemsRequest(SchemaModel):
 
 class RankedItemsResponse(SchemaModel):
     items: list[BreakdownItem] = Field(default_factory=list)
+
+
+class LegacyReportTask(SchemaModel):
+    task_id: str = Field(min_length=1)
+    user_subquery: str = Field(min_length=1)
+    metric: MetricName | None = None
+    date_from: date | None = None
+    date_to: date | None = None
+    supported: bool = True
+    report_id: ReportType | None = None
+    reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_supported_task(self) -> LegacyReportTask:
+        if self.supported:
+            if self.metric is None or self.date_from is None or self.date_to is None:
+                raise ValueError("supported legacy report tasks require metric and date range")
+            if self.date_from > self.date_to:
+                raise ValueError("date_from must be on or before date_to")
+        return self
+
+
+class LegacyReportTaskResult(SchemaModel):
+    task_id: str = Field(min_length=1)
+    status: Literal["completed", "unsupported", "failed"]
+    answer_fragment: str = Field(min_length=1)
+    warnings: list[str] = Field(default_factory=list)
