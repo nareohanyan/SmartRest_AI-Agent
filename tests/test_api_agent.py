@@ -48,7 +48,7 @@ def _request_payload(
     metadata: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     return {
-        "thread_id": "11111111-1111-1111-1111-111111111111",
+        "chat_id": "11111111-1111-1111-1111-111111111111",
         "user_question": question,
         "scope_request": {
             "user_id": 101,
@@ -67,7 +67,7 @@ async def test_supported_request_returns_completed_contract(api_client: AsyncCli
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["thread_id"] == "11111111-1111-1111-1111-111111111111"
+    assert payload["chat_id"] == "11111111-1111-1111-1111-111111111111"
     assert isinstance(payload["run_id"], str) and payload["run_id"]
     assert payload["status"] == "completed"
     assert payload["answer"]
@@ -186,7 +186,7 @@ async def test_request_validation_error_returns_422(api_client: AsyncClient) -> 
     response = await api_client.post(
         "/agent/run",
         json={
-            "thread_id": "11111111-1111-1111-1111-111111111111",
+            "chat_id": "11111111-1111-1111-1111-111111111111",
             "user_question": "What were total sales?",
         },
     )

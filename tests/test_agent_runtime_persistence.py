@@ -19,7 +19,7 @@ from app.services.agent_runtime import AgentRuntimeExecutionError, AgentRuntimeS
 def _request_payload() -> AgentRunRequest:
     return AgentRunRequest.model_validate(
         {
-            "thread_id": "11111111-1111-1111-1111-111111111111",
+            "chat_id": "11111111-1111-1111-1111-111111111111",
             "user_question": "What were total sales 2026-03-01 to 2026-03-07?",
             "scope_request": {
                 "user_id": 101,
@@ -102,7 +102,7 @@ def test_runtime_merges_persistence_warnings_into_response() -> None:
     internal_run_id = uuid4()
     spy = _PersistenceSpy(
         start_result=StartRunPersistenceResult(
-            thread_id=uuid4(),
+            chat_id=uuid4(),
             internal_run_id=internal_run_id,
             warnings=["persistence_warning_start"],
         ),
@@ -144,7 +144,7 @@ def test_runtime_persists_finish_for_each_terminal_graph_status(
 ) -> None:
     spy = _PersistenceSpy(
         start_result=StartRunPersistenceResult(
-            thread_id=uuid4(),
+            chat_id=uuid4(),
             internal_run_id=uuid4(),
         ),
         finish_result=FinishRunPersistenceResult(),
@@ -168,7 +168,7 @@ def test_runtime_persists_finish_for_each_terminal_graph_status(
 def test_runtime_persists_failed_terminal_status_on_llm_error() -> None:
     spy = _PersistenceSpy(
         start_result=StartRunPersistenceResult(
-            thread_id=uuid4(),
+            chat_id=uuid4(),
             internal_run_id=uuid4(),
         ),
         finish_result=FinishRunPersistenceResult(),
@@ -191,7 +191,7 @@ def test_runtime_persists_failed_terminal_status_on_llm_error() -> None:
 def test_runtime_persists_failed_terminal_status_on_internal_error() -> None:
     spy = _PersistenceSpy(
         start_result=StartRunPersistenceResult(
-            thread_id=uuid4(),
+            chat_id=uuid4(),
             internal_run_id=uuid4(),
         ),
         finish_result=FinishRunPersistenceResult(),
@@ -212,7 +212,7 @@ def test_runtime_persists_failed_terminal_status_on_internal_error() -> None:
 def test_runtime_uses_fallback_run_id_when_persistence_run_id_missing() -> None:
     spy = _PersistenceSpy(
         start_result=StartRunPersistenceResult(
-            thread_id=None,
+            chat_id=None,
             internal_run_id=None,
             warnings=["persistence_warning_start"],
         ),

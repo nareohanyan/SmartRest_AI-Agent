@@ -23,7 +23,7 @@ class _RaisingGraph:
 def _request_payload() -> AgentRunRequest:
     return AgentRunRequest.model_validate(
         {
-            "thread_id": "11111111-1111-1111-1111-111111111111",
+            "chat_id": "11111111-1111-1111-1111-111111111111",
             "user_question": "What were total sales 2026-03-01 to 2026-03-07?",
             "scope_request": {
                 "user_id": 101,

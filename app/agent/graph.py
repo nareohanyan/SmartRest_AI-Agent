@@ -788,14 +788,23 @@ def _reject_node(state: AgentState) -> dict[str, Any]:
         }
 
     reason = state.policy_reason or (
-        "Unsupported request." if language == "en" else "Չաջակցվող հարցում։"
+        "Չաջակցվող հարցում։"
+        if language == "hy"
+        else (
+            "Неподдерживаемый запрос."
+            if language == "ru"
+            else "Unsupported request."
+        )
     )
     supported_reports = (
-        "Supported reports: sales_total, order_count, average_check, sales_by_source."
-        if language == "en"
+        "Աջակցվող հաշվետվություններն են՝ sales_total, order_count, "
+        "average_check, sales_by_source։"
+        if language == "hy"
         else (
-            "Աջակցվող հաշվետվություններն են՝ sales_total, order_count, "
-            "average_check, sales_by_source։"
+            "Поддерживаемые отчеты: sales_total, order_count, "
+            "average_check, sales_by_source."
+            if language == "ru"
+            else "Supported reports: sales_total, order_count, average_check, sales_by_source."
         )
     )
     fallback_answer = f"{reason} {supported_reports}"

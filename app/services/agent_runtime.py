@@ -49,17 +49,17 @@ class AgentRuntimeService:
 
     def run(self, request: AgentRunRequest) -> AgentRunResponse:
         start_persistence_result = self._persistence_service.start_run(
-            thread_id=request.thread_id,
+            chat_id=request.chat_id,
             user_id=request.scope_request.user_id,
             profile_id=request.scope_request.profile_id,
             profile_nick=request.scope_request.profile_nick,
             intent=None,
-            metadata_json={"thread_id": str(request.thread_id)},
+            metadata_json={"chat_id": str(request.chat_id)},
         )
         start_warnings = start_persistence_result.warnings
         run_id = start_persistence_result.internal_run_id or uuid4()
         initial_state = AgentState(
-            thread_id=request.thread_id,
+            chat_id=request.chat_id,
             run_id=run_id,
             user_question=request.user_question,
             scope_request=ResolveScopeRequest.model_validate(request.scope_request.model_dump()),
@@ -73,7 +73,7 @@ class AgentRuntimeService:
             final_state = AgentState.model_validate(runtime_output)
         except LLMClientError as exc:
             self._persistence_service.finish_run(
-                thread_id=start_persistence_result.thread_id,
+                chat_id=start_persistence_result.chat_id,
                 internal_run_id=start_persistence_result.internal_run_id,
                 status=RunStatus.FAILED,
                 question=request.user_question,
@@ -87,7 +87,7 @@ class AgentRuntimeService:
             ) from exc
         except Exception as exc:
             self._persistence_service.finish_run(
-                thread_id=start_persistence_result.thread_id,
+                chat_id=start_persistence_result.chat_id,
                 internal_run_id=start_persistence_result.internal_run_id,
                 status=RunStatus.FAILED,
                 question=request.user_question,
@@ -101,7 +101,7 @@ class AgentRuntimeService:
             ) from exc
 
         finish_persistence_result = self._persistence_service.finish_run(
-            thread_id=start_persistence_result.thread_id,
+            chat_id=start_persistence_result.chat_id,
             internal_run_id=start_persistence_result.internal_run_id,
             status=final_state.status,
             question=final_state.user_question,
@@ -119,7 +119,7 @@ class AgentRuntimeService:
         )
 
         return AgentRunResponse(
-            thread_id=final_state.thread_id,
+            chat_id=final_state.chat_id,
             run_id=final_state.run_id,
             status=final_state.status,
             answer=final_state.final_answer,

@@ -23,13 +23,13 @@ class ScopeRequestPayload(_ApiSchema):
 
 
 class AgentRunRequest(_ApiSchema):
-    thread_id: UUID
+    chat_id: UUID
     user_question: str = Field(min_length=1)
     scope_request: ScopeRequestPayload
 
 
 class AgentRunResponse(_ApiSchema):
-    thread_id: UUID
+    chat_id: UUID
     run_id: UUID
     status: RunStatus
     answer: str | None = None

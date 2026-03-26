@@ -71,7 +71,7 @@ def _report_result_payload() -> dict[str, object]:
 
 def _agent_state_payload() -> dict[str, object]:
     return {
-        "thread_id": "11111111-1111-1111-1111-111111111111",
+        "chat_id": "11111111-1111-1111-1111-111111111111",
         "run_id": "22222222-2222-2222-2222-222222222222",
         "user_question": "What were sales last week?",
         "scope_request": _identity_payload(),

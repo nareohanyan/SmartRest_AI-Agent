@@ -11,6 +11,8 @@
 ## Docker Compose
 1. Copy env template:
    - `cp .env.example .env`
+   - Set `SMARTREST_DATABASE_URL` for the operational DB.
+   - Set `SMARTREST_CHAT_ANALYTICS_DATABASE_URL` for the chat analytics DB.
 2. Start app service:
    - `docker compose up --build`
 3. Optional: start Postgres profile too:

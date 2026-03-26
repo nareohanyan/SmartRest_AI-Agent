@@ -10,13 +10,13 @@ from typing import Any
 import pytest
 
 import app.agent.graph as graph_module
-from app.agent.graph import build_agent_graph
+from app.agent.graph import _reject_node, build_agent_graph
 from app.agent.llm.exceptions import LLMClientError
 from app.agent.tool_registry import ToolId
 from app.schemas.agent import AgentState, LLMErrorCategory, RunStatus
 from app.schemas.analysis import DimensionName, MetricName
 from app.schemas.reports import ReportType
-from app.schemas.tools import ToolOperation
+from app.schemas.tools import AccessStatus, ToolOperation
 
 
 class _FakeLLMClient:
@@ -125,7 +125,7 @@ def _initial_state(
     if scope_payload_overrides:
         scope_payload = {**scope_payload, **scope_payload_overrides}
     return {
-        "thread_id": "11111111-1111-1111-1111-111111111111",
+        "chat_id": "11111111-1111-1111-1111-111111111111",
         "run_id": "22222222-2222-2222-2222-222222222222",
         "user_question": question,
         "scope_request": scope_payload,
@@ -248,6 +248,29 @@ def test_unsupported_request_routes_to_safe_answer() -> None:
     ]
     assert final_state.status is RunStatus.REJECTED
     assert "060 44 55 66" in (final_state.final_answer or "")
+
+
+def test_reject_node_uses_russian_fallback_for_granted_scope() -> None:
+    state = AgentState.model_validate(
+        {
+            "chat_id": "11111111-1111-1111-1111-111111111111",
+            "run_id": "22222222-2222-2222-2222-222222222222",
+            "user_question": "Покажи неподдерживаемый отчет.",
+            "user_scope": {
+                "status": AccessStatus.GRANTED.value,
+                "allowed_report_ids": [ReportType.SALES_TOTAL.value],
+            },
+            "needs_clarification": False,
+            "status": RunStatus.RUNNING.value,
+        }
+    )
+
+    result = _reject_node(state)
+
+    assert result["status"] is RunStatus.REJECTED
+    assert result["final_answer"] is not None
+    assert "sales_total" in result["final_answer"]
+    assert "Неподдерживаемый запрос." in result["final_answer"]
 
 
 def test_smalltalk_in_armenian_routes_to_smalltalk_answer() -> None:

@@ -29,8 +29,8 @@ def _load_env_file_if_present() -> None:
 
 
 def _resolve_chat_analytics_database_url() -> str | None:
-    return os.getenv("CHAT_ANALYTICS_DATABASE_URL") or os.getenv(
-        "SMARTREST_CHAT_ANALYTICS_DATABASE_URL"
+    return os.getenv("SMARTREST_CHAT_ANALYTICS_DATABASE_URL") or os.getenv(
+        "CHAT_ANALYTICS_DATABASE_URL"
     )
 
 
@@ -39,9 +39,11 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     db_url = _resolve_chat_analytics_database_url()
     if not db_url:
         raise pytest.UsageError(
+            "SMARTREST_CHAT_ANALYTICS_DATABASE_URL or "
             "CHAT_ANALYTICS_DATABASE_URL is required for full test runs. "
             "Skipping DB tests is disabled."
         )
+    os.environ["SMARTREST_CHAT_ANALYTICS_DATABASE_URL"] = db_url
     os.environ["CHAT_ANALYTICS_DATABASE_URL"] = db_url
 
     engine = create_engine(db_url, future=True)

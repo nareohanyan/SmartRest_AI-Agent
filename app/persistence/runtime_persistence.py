@@ -22,7 +22,7 @@ PERSISTENCE_WARNING_UNAVAILABLE = "persistence_unavailable"
 
 @dataclass(frozen=True)
 class StartRunPersistenceResult:
-    thread_id: UUID | None = None
+    chat_id: UUID | None = None
     internal_run_id: UUID | None = None
     warnings: list[str] = field(default_factory=list)
 
@@ -68,7 +68,7 @@ class RuntimePersistenceService:
     def start_run(
         self,
         *,
-        thread_id: UUID,
+        chat_id: UUID,
         user_id: int | str,
         profile_id: int | str,
         profile_nick: str,
@@ -85,8 +85,8 @@ class RuntimePersistenceService:
             return StartRunPersistenceResult(warnings=[PERSISTENCE_WARNING_UNAVAILABLE])
         try:
             repository = self._repository_factory(session)
-            thread = repository.get_or_create_thread(
-                thread_id=thread_id,
+            chat = repository.get_or_create_chat(
+                chat_id=chat_id,
                 user_id=user_id,
                 profile_id=profile_id,
                 profile_nick=profile_nick,
@@ -94,7 +94,7 @@ class RuntimePersistenceService:
                 metadata_json=metadata_json,
             )
             run = repository.create_run_started(
-                thread_id=cast(UUID, thread.id),
+                chat_id=cast(UUID, chat.id),
                 user_id=user_id,
                 profile_id=profile_id,
                 profile_nick=profile_nick,
@@ -102,7 +102,7 @@ class RuntimePersistenceService:
             )
             session.commit()
             return StartRunPersistenceResult(
-                thread_id=cast(UUID, thread.id),
+                chat_id=cast(UUID, chat.id),
                 internal_run_id=cast(UUID, run.id),
             )
         except PersistenceValidationError:
@@ -117,7 +117,7 @@ class RuntimePersistenceService:
     def finish_run(
         self,
         *,
-        thread_id: UUID | None,
+        chat_id: UUID | None,
         internal_run_id: UUID | None,
         status: RunStatus,
         question: str,
@@ -125,7 +125,7 @@ class RuntimePersistenceService:
         error_message: str | None = None,
         error_code: str | None = None,
     ) -> FinishRunPersistenceResult:
-        if thread_id is None or internal_run_id is None:
+        if chat_id is None or internal_run_id is None:
             return FinishRunPersistenceResult(warnings=[PERSISTENCE_WARNING_MISSING_CONTEXT])
 
         try:
@@ -141,10 +141,13 @@ class RuntimePersistenceService:
                 error_code=error_code,
             )
             repository.write_message(
-                thread_id=thread_id,
+                chat_id=chat_id,
                 run_id=internal_run_id,
-                question=question,
-                answer=answer,
+                question_text=question,
+                answer_text=answer,
+                status=status,
+                error_message=error_message,
+                error_code=error_code,
             )
             session.commit()
             return FinishRunPersistenceResult()

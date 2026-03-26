@@ -8,11 +8,14 @@ PIP ?= .venv/bin/pip
 PRE_COMMIT ?= .venv/bin/pre-commit
 PRE_COMMIT_HOME ?= /tmp/pre-commit-cache
 ALEMBIC ?= .venv/bin/alembic
+ALEMBIC_SMARTREST ?= .venv/bin/alembic -c alembic-smartrest.ini
 ENV_FILE ?= .env
 MIGRATIONS_DIR ?= migrations/chat_analytics/versions
+SMARTREST_MIGRATIONS_DIR ?= migrations/smartrest/versions
 
 .PHONY: help setup up app-up db-up down down-v ps logs db-logs db-shell db-list db-chat-tables \
-	build lint typecheck test precommit quality migrate current revision
+	build lint typecheck test precommit quality migrate current revision migrate-smartrest \
+	current-smartrest revision-smartrest
 
 help:
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -71,10 +74,10 @@ precommit:
 
 quality: lint typecheck test precommit ## Run full local quality gate.
 
-migrate:
+migrate: ## Run chat analytics migrations.
 	@set -a; source $(ENV_FILE); set +a; $(ALEMBIC) upgrade head
 
-current:
+current: ## Show current chat analytics migration revision.
 	@set -a; source $(ENV_FILE); set +a; $(ALEMBIC) current
 
 revision:
@@ -84,3 +87,17 @@ revision:
 	fi
 	@mkdir -p $(MIGRATIONS_DIR)
 	@set -a; source $(ENV_FILE); set +a; $(ALEMBIC) revision --autogenerate -m "$(m)"
+
+migrate-smartrest:
+	@set -a; source $(ENV_FILE); set +a; $(ALEMBIC_SMARTREST) upgrade head
+
+current-smartrest:
+	@set -a; source $(ENV_FILE); set +a; $(ALEMBIC_SMARTREST) current
+
+revision-smartrest:
+	@if [ -z "$(m)" ]; then \
+		echo "Usage: make revision-smartrest m='your message'"; \
+		exit 1; \
+	fi
+	@mkdir -p $(SMARTREST_MIGRATIONS_DIR)
+	@set -a; source $(ENV_FILE); set +a; $(ALEMBIC_SMARTREST) revision --autogenerate -m "$(m)"

@@ -83,7 +83,7 @@ class ToolResponses(SchemaModel):
 
 
 class AgentState(SchemaModel):
-    thread_id: UUID
+    chat_id: UUID
     run_id: UUID
     user_question: str = Field(min_length=1)
     scope_request: ResolveScopeRequest | None = None

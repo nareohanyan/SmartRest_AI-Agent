@@ -126,7 +126,7 @@ Node-by-node behavior:
 ## 6) Shared Agent State (V1)
 
 Required state fields:
-- `thread_id`: conversation thread identifier.
+- `chat_id`: conversation chat identifier.
 - `run_id`: unique execution identifier.
 - `user_question`: raw user message.
 - `user_scope`: resolved access scope/permissions.
