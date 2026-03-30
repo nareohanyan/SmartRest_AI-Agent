@@ -8,6 +8,7 @@ from uuid import uuid4
 from app.agent.graph import build_agent_graph
 from app.agent.llm.exceptions import LLMClientError
 from app.api.schemas import AgentRunRequest, AgentRunResponse
+from app.core.auth import VerifiedIdentity
 from app.persistence.runtime_persistence import (
     RuntimePersistenceService,
     get_runtime_persistence_service,
@@ -47,12 +48,17 @@ class AgentRuntimeService:
         self._graph_factory = graph_factory
         self._persistence_service = persistence_service or get_runtime_persistence_service()
 
-    def run(self, request: AgentRunRequest) -> AgentRunResponse:
+    def run(
+        self,
+        request: AgentRunRequest,
+        *,
+        verified_identity: VerifiedIdentity,
+    ) -> AgentRunResponse:
         start_persistence_result = self._persistence_service.start_run(
             chat_id=request.chat_id,
-            user_id=request.scope_request.user_id,
-            profile_id=request.scope_request.profile_id,
-            profile_nick=request.scope_request.profile_nick,
+            user_id=verified_identity.user_id,
+            profile_id=verified_identity.profile_id,
+            profile_nick=verified_identity.profile_nick,
             intent=None,
             metadata_json={"chat_id": str(request.chat_id)},
         )
@@ -62,7 +68,16 @@ class AgentRuntimeService:
             chat_id=request.chat_id,
             run_id=run_id,
             user_question=request.user_question,
-            scope_request=ResolveScopeRequest.model_validate(request.scope_request.model_dump()),
+            scope_request=ResolveScopeRequest.model_validate(
+                {
+                    "user_id": verified_identity.user_id,
+                    "profile_id": verified_identity.profile_id,
+                    "profile_nick": verified_identity.profile_nick,
+                    "metadata": request.scope_request.metadata,
+                    "requested_branch_ids": request.scope_request.requested_branch_ids,
+                    "requested_export_mode": request.scope_request.requested_export_mode,
+                }
+            ),
             needs_clarification=False,
             status=RunStatus.RUNNING,
         )

@@ -10,9 +10,12 @@ from sqlalchemy.orm import Session
 
 from app.api.schemas import AgentRunRequest
 from app.chat_analytics.models import AgentRun, Base, Chat, ChatEvent, Feedback, Message
+from app.core.auth import VerifiedIdentity
 from app.persistence.runtime_persistence import RuntimePersistenceService
 from app.schemas.agent import RunStatus
 from app.services.agent_runtime import AgentRuntimeExecutionError, AgentRuntimeService
+
+_VERIFIED_IDENTITY = VerifiedIdentity(profile_nick="nick", user_id=101, profile_id=201)
 
 
 def _chat_analytics_database_url() -> str:
@@ -69,6 +72,13 @@ def _request_payload(chat_id: UUID) -> AgentRunRequest:
         {
             "chat_id": str(chat_id),
             "user_question": "What were total sales 2026-03-01 to 2026-03-07?",
+            "auth": {
+                "profile_nick": "nick",
+                "user_id": 101,
+                "profile_id": 201,
+                "current_timestamp": 0,
+                "token": "0" * 64,
+            },
             "scope_request": {
                 "user_id": 101,
                 "profile_id": 201,
@@ -142,7 +152,10 @@ def test_runtime_persists_completed_run(
     )
 
     try:
-        response = runtime_service.run(_request_payload(chat_id))
+        response = runtime_service.run(
+            _request_payload(chat_id),
+            verified_identity=_VERIFIED_IDENTITY,
+        )
         assert response.status is RunStatus.COMPLETED
 
         with Session(bind=analytics_engine) as session:
@@ -171,7 +184,10 @@ def test_runtime_persists_clarify_run(
     )
 
     try:
-        response = runtime_service.run(_request_payload(chat_id))
+        response = runtime_service.run(
+            _request_payload(chat_id),
+            verified_identity=_VERIFIED_IDENTITY,
+        )
         assert response.status is RunStatus.CLARIFY
 
         with Session(bind=analytics_engine) as session:
@@ -197,7 +213,10 @@ def test_runtime_persists_denied_run_as_failed_with_code(
     )
 
     try:
-        response = runtime_service.run(_request_payload(chat_id))
+        response = runtime_service.run(
+            _request_payload(chat_id),
+            verified_identity=_VERIFIED_IDENTITY,
+        )
         assert response.status is RunStatus.DENIED
 
         with Session(bind=analytics_engine) as session:
@@ -221,7 +240,10 @@ def test_runtime_persists_failed_run_on_graph_exception(
 
     try:
         with pytest.raises(AgentRuntimeExecutionError):
-            runtime_service.run(_request_payload(chat_id))
+            runtime_service.run(
+                _request_payload(chat_id),
+                verified_identity=_VERIFIED_IDENTITY,
+            )
 
         with Session(bind=analytics_engine) as session:
             _chat, run, message = _fetch_artifacts(session, chat_id)

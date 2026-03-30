@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -11,6 +12,8 @@ import app.agent.graph as graph_module
 from app.api.app import create_app
 from app.api.routes.agent import _get_runtime_service
 from app.api.schemas import AgentRunRequest
+from app.core.auth import build_canonical_payload, sign_payload_token
+from app.core.config import get_settings
 from app.services.agent_runtime import AgentRuntimeExecutionError
 
 pytestmark = pytest.mark.anyio
@@ -32,7 +35,36 @@ def _missing_openai_key() -> Any:
 
 @pytest.fixture(autouse=True)
 def _disable_openai_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    get_settings.cache_clear()
     monkeypatch.setattr(graph_module, "get_llm_client", _missing_openai_key)
+    monkeypatch.setenv("SMARTREST_AUTH_SECRET_KEY", "test-secret")
+    try:
+        yield
+    finally:
+        get_settings.cache_clear()
+
+
+def _auth_payload(
+    *,
+    profile_nick: str = "nick",
+    user_id: int = 101,
+    profile_id: int = 201,
+    current_timestamp: int | None = None,
+) -> dict[str, Any]:
+    issued_at = current_timestamp if current_timestamp is not None else int(time.time())
+    canonical_payload = build_canonical_payload(
+        current_timestamp=issued_at,
+        profile_nick=profile_nick,
+        profile_id=profile_id,
+        user_id=user_id,
+    )
+    return {
+        "profile_nick": profile_nick,
+        "user_id": user_id,
+        "profile_id": profile_id,
+        "current_timestamp": issued_at,
+        "token": sign_payload_token("test-secret", canonical_payload),
+    }
 
 
 @pytest.fixture
@@ -50,6 +82,7 @@ def _request_payload(
     return {
         "chat_id": "11111111-1111-1111-1111-111111111111",
         "user_question": question,
+        "auth": _auth_payload(),
         "scope_request": {
             "user_id": 101,
             "profile_id": 201,
@@ -182,6 +215,25 @@ async def test_denied_scope_returns_denied_and_blocks_report_path(
     assert payload["answer"] is not None
 
 
+async def test_invalid_auth_token_returns_401(api_client: AsyncClient) -> None:
+    payload = _request_payload("What were total sales 2026-03-01 to 2026-03-07?")
+    payload["auth"]["token"] = "0" * 64
+
+    response = await api_client.post("/agent/run", json=payload)
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Unauthorized"}
+
+
+async def test_mismatched_auth_and_scope_identity_returns_422(api_client: AsyncClient) -> None:
+    payload = _request_payload("What were total sales 2026-03-01 to 2026-03-07?")
+    payload["auth"]["profile_nick"] = "other"
+
+    response = await api_client.post("/agent/run", json=payload)
+
+    assert response.status_code == 422
+
+
 async def test_request_validation_error_returns_422(api_client: AsyncClient) -> None:
     response = await api_client.post(
         "/agent/run",
@@ -199,7 +251,7 @@ async def test_runtime_failure_returns_controlled_500(
     api_client: AsyncClient,
 ) -> None:
     class _FailingRuntime:
-        def run(self, _request: AgentRunRequest) -> Any:
+        def run(self, _request: AgentRunRequest, **_kwargs: Any) -> Any:
             raise AgentRuntimeExecutionError("boom")
 
     async def _override_dependency() -> _FailingRuntime:

@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     openai_retry_max_attempts: int = 3
     openai_retry_initial_delay_seconds: float = 0.2
     openai_retry_max_delay_seconds: float = 2.0
+    auth_secret_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SMARTREST_AUTH_SECRET_KEY", "SECRET_KEY"),
+    )
+    auth_token_max_age_seconds: int = 300
+    auth_token_max_future_skew_seconds: int = 30
 
     planner_mode: Literal["deterministic", "hybrid", "llm"] = "hybrid"
     planner_min_confidence: float = Field(default=0.75, ge=0.0, le=1.0)

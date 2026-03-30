@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.agent import RunStatus
 from app.schemas.reports import ReportFilters, ReportType
@@ -22,10 +22,29 @@ class ScopeRequestPayload(_ApiSchema):
     requested_export_mode: ExportMode | None = None
 
 
+class SignedAuthPayload(_ApiSchema):
+    profile_nick: str = Field(min_length=1)
+    user_id: int
+    profile_id: int
+    current_timestamp: int
+    token: str = Field(min_length=64, max_length=64)
+
+
 class AgentRunRequest(_ApiSchema):
     chat_id: UUID
     user_question: str = Field(min_length=1)
+    auth: SignedAuthPayload
     scope_request: ScopeRequestPayload
+
+    @model_validator(mode="after")
+    def validate_auth_matches_scope_identity(self) -> AgentRunRequest:
+        if self.auth.profile_nick != self.scope_request.profile_nick:
+            raise ValueError("auth.profile_nick must match scope_request.profile_nick")
+        if self.auth.user_id != self.scope_request.user_id:
+            raise ValueError("auth.user_id must match scope_request.user_id")
+        if self.auth.profile_id != self.scope_request.profile_id:
+            raise ValueError("auth.profile_id must match scope_request.profile_id")
+        return self
 
 
 class AgentRunResponse(_ApiSchema):

@@ -15,7 +15,7 @@ SMARTREST_MIGRATIONS_DIR ?= migrations/smartrest/versions
 
 .PHONY: help setup up app-up db-up down down-v ps logs db-logs db-shell db-list db-chat-tables \
 	build lint typecheck test precommit quality migrate current revision migrate-smartrest \
-	current-smartrest revision-smartrest
+	current-smartrest revision-smartrest run-8010
 
 help:
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -26,6 +26,9 @@ setup:
 
 build:
 	$(COMPOSE) build
+
+run-8010:
+	$(PYTHON) -m uvicorn app.main:app --host 0.0.0.0 --port 8010 --reload
 
 up:
 	$(COMPOSE) --profile db up -d

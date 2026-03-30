@@ -4,12 +4,15 @@ import pytest
 
 from app.agent.llm.exceptions import LLMClientError
 from app.api.schemas import AgentRunRequest
+from app.core.auth import VerifiedIdentity
 from app.schemas.agent import LLMErrorCategory
 from app.services.agent_runtime import (
     AgentRuntimeExecutionError,
     AgentRuntimeService,
     RuntimeErrorCategory,
 )
+
+_VERIFIED_IDENTITY = VerifiedIdentity(profile_nick="nick", user_id=101, profile_id=201)
 
 
 class _RaisingGraph:
@@ -25,6 +28,13 @@ def _request_payload() -> AgentRunRequest:
         {
             "chat_id": "11111111-1111-1111-1111-111111111111",
             "user_question": "What were total sales 2026-03-01 to 2026-03-07?",
+            "auth": {
+                "profile_nick": "nick",
+                "user_id": 101,
+                "profile_id": 201,
+                "current_timestamp": 0,
+                "token": "0" * 64,
+            },
             "scope_request": {
                 "user_id": 101,
                 "profile_id": 201,
@@ -55,7 +65,7 @@ def test_runtime_maps_llm_failure_to_controlled_categories(
     runtime_service = AgentRuntimeService(graph_factory=lambda: _RaisingGraph(llm_error))
 
     with pytest.raises(AgentRuntimeExecutionError) as exc_info:
-        runtime_service.run(_request_payload())
+        runtime_service.run(_request_payload(), verified_identity=_VERIFIED_IDENTITY)
 
     assert exc_info.value.category is runtime_category
 
@@ -64,6 +74,6 @@ def test_runtime_maps_non_llm_exception_to_internal_category() -> None:
     runtime_service = AgentRuntimeService(graph_factory=lambda: _RaisingGraph(RuntimeError("boom")))
 
     with pytest.raises(AgentRuntimeExecutionError) as exc_info:
-        runtime_service.run(_request_payload())
+        runtime_service.run(_request_payload(), verified_identity=_VERIFIED_IDENTITY)
 
     assert exc_info.value.category is RuntimeErrorCategory.INTERNAL
