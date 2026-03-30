@@ -7,6 +7,7 @@ from sqlalchemy import (
     TIMESTAMP,
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     ForeignKey,
@@ -24,6 +25,7 @@ from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 from sqlalchemy.schema import MetaData
 
 from app.db.operational import get_operational_engine, get_operational_session_factory
+from app.schemas.subscription import AIAgentSubscriptionStatus
 
 naming_convention = {
     "ix": "ix_%(column_0_label)s",
@@ -43,12 +45,25 @@ class TimestampMixin:
 
 class Profile(Base):
     __tablename__ = "profiles"
+    __table_args__ = (
+        CheckConstraint(
+            "ai_agent_subscription_status IN "
+            "('active', 'trial', 'expired', 'cancelled', 'suspended')",
+            name="ai_agent_subscription_status",
+        ),
+    )
     id = Column(BigInteger, primary_key=True)
     name = Column(String(255), nullable=True)
     billing_status = Column(SmallInteger, nullable=True)
     billing_start_time = Column(DateTime(timezone=True), nullable=True)
     billing_end_time = Column(DateTime(timezone=True), nullable=True)
     currency = Column(SmallInteger, nullable=True)
+    ai_agent_subscription_status = Column(
+        String(32),
+        nullable=False,
+        server_default=sa.text(f"'{AIAgentSubscriptionStatus.EXPIRED.value}'"),
+    )
+    ai_agent_subscription_expires_at = Column(DateTime(timezone=True), nullable=True)
 
     users = relationship("User", back_populates="profile", cascade="all, delete-orphan")
     orders = relationship("Order", back_populates="profile", cascade="all, delete-orphan")

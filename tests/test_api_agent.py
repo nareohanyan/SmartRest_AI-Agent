@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import pytest
@@ -10,10 +10,11 @@ from httpx import ASGITransport, AsyncClient
 
 import app.agent.graph as graph_module
 from app.api.app import create_app
-from app.api.routes.agent import _get_runtime_service
+from app.api.routes.agent import _get_runtime_service, _get_subscription_service
 from app.api.schemas import AgentRunRequest
 from app.core.auth import build_canonical_payload, sign_payload_token
 from app.core.config import get_settings
+from app.schemas.subscription import SubscriptionAccessDecision
 from app.services.agent_runtime import AgentRuntimeExecutionError
 
 pytestmark = pytest.mark.anyio
@@ -42,6 +43,26 @@ def _disable_openai_client(monkeypatch: pytest.MonkeyPatch) -> None:
         yield
     finally:
         get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _allow_subscription_access(app: FastAPI) -> Iterator[None]:
+    class _AllowingSubscriptionService:
+        def evaluate_access(self, _verified_identity: Any) -> SubscriptionAccessDecision:
+            return SubscriptionAccessDecision(
+                allowed=True,
+                reason_code="subscription_allowed",
+                reason_message="AI agent subscription is active.",
+            )
+
+    async def _override_subscription_service() -> _AllowingSubscriptionService:
+        return _AllowingSubscriptionService()
+
+    app.dependency_overrides[_get_subscription_service] = _override_subscription_service
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(_get_subscription_service, None)
 
 
 def _auth_payload(
@@ -232,6 +253,34 @@ async def test_mismatched_auth_and_scope_identity_returns_422(api_client: AsyncC
     response = await api_client.post("/agent/run", json=payload)
 
     assert response.status_code == 422
+
+
+async def test_inactive_subscription_returns_403(
+    app: FastAPI,
+    api_client: AsyncClient,
+) -> None:
+    class _DenyingSubscriptionService:
+        def evaluate_access(self, _verified_identity: Any) -> SubscriptionAccessDecision:
+            return SubscriptionAccessDecision(
+                allowed=False,
+                reason_code="subscription_expired",
+                reason_message="AI agent subscription is inactive.",
+            )
+
+    async def _override_subscription_service() -> _DenyingSubscriptionService:
+        return _DenyingSubscriptionService()
+
+    app.dependency_overrides[_get_subscription_service] = _override_subscription_service
+    try:
+        response = await api_client.post(
+            "/agent/run",
+            json=_request_payload("What were total sales 2026-03-01 to 2026-03-07?"),
+        )
+    finally:
+        app.dependency_overrides.pop(_get_subscription_service, None)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "AI agent subscription is inactive."}
 
 
 async def test_request_validation_error_returns_422(api_client: AsyncClient) -> None:
