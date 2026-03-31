@@ -54,6 +54,7 @@ class Profile(Base):
     )
     id = Column(BigInteger, primary_key=True)
     name = Column(String(255), nullable=True)
+    profile_nick = Column(String(255), nullable=True)
     billing_status = Column(SmallInteger, nullable=True)
     billing_start_time = Column(DateTime(timezone=True), nullable=True)
     billing_end_time = Column(DateTime(timezone=True), nullable=True)
@@ -426,7 +427,7 @@ class MaterialContent(Base, TimestampMixin):
     archived = Column(Boolean, nullable=True, server_default=sa.text("false"))
     profile_id = Column(BigInteger, ForeignKey("profiles.id", ondelete="CASCADE"), index=True, nullable=False)
     material_id = Column(BigInteger, ForeignKey("materials.id"), index=True, nullable=True)
-    unit_id = Column(BigInteger, ForeignKey("measurements.id"), index=True, nullable=True)
+    unit_id = Column(BigInteger, ForeignKey("units.id"), index=True, nullable=True)
     price = Column(Numeric(18, 6), nullable=True)
     min_quantity = Column(Numeric(18, 6), nullable=True)
     code = Column(String(64), nullable=True)
@@ -484,7 +485,7 @@ class StoreLanguage(Base, TimestampMixin):
 
 
 class Measurement(Base, TimestampMixin):
-    __tablename__ = "measurements"
+    __tablename__ = "units"
     id = Column(BigInteger, primary_key=True)
     deleted = Column(Boolean, nullable=True, server_default=sa.text("false"))
     archived = Column(Boolean, nullable=True, server_default=sa.text("false"))
@@ -492,14 +493,14 @@ class Measurement(Base, TimestampMixin):
 
 
 class MeasurementLanguage(Base, TimestampMixin):
-    __tablename__ = "measurements_lng"
+    __tablename__ = "unit_language"
     id = Column(BigInteger, primary_key=True)
     deleted = Column(Boolean, nullable=True, server_default=sa.text("false"))
     archived = Column(Boolean, nullable=True, server_default=sa.text("false"))
     profile_id = Column(BigInteger, ForeignKey("profiles.id", ondelete="CASCADE"), index=True, nullable=False)
     language_id = Column(BigInteger, nullable=True)
     title = Column(String(255), nullable=True)
-    unit_id = Column(BigInteger, ForeignKey("measurements.id"), index=True, nullable=True)
+    unit_id = Column(BigInteger, ForeignKey("units.id"), index=True, nullable=True)
 
 
 class FIFOHistory(Base, TimestampMixin):
