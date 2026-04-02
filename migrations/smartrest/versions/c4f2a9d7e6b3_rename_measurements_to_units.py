@@ -19,19 +19,23 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def _rename_index(old_name: str, new_name: str) -> None:
+    op.execute(f'ALTER INDEX "{old_name}" RENAME TO "{new_name}"')
+
+
 def upgrade() -> None:
     op.rename_table("measurements", "units")
-    op.rename_index("ix_measurements_profile_id", "ix_units_profile_id")
+    _rename_index("ix_measurements_profile_id", "ix_units_profile_id")
 
     op.rename_table("measurements_lng", "unit_language")
-    op.rename_index("ix_measurements_lng_profile_id", "ix_unit_language_profile_id")
-    op.rename_index("ix_measurements_lng_unit_id", "ix_unit_language_unit_id")
+    _rename_index("ix_measurements_lng_profile_id", "ix_unit_language_profile_id")
+    _rename_index("ix_measurements_lng_unit_id", "ix_unit_language_unit_id")
 
 
 def downgrade() -> None:
-    op.rename_index("ix_unit_language_unit_id", "ix_measurements_lng_unit_id")
-    op.rename_index("ix_unit_language_profile_id", "ix_measurements_lng_profile_id")
+    _rename_index("ix_unit_language_unit_id", "ix_measurements_lng_unit_id")
+    _rename_index("ix_unit_language_profile_id", "ix_measurements_lng_profile_id")
     op.rename_table("unit_language", "measurements_lng")
 
-    op.rename_index("ix_units_profile_id", "ix_measurements_profile_id")
+    _rename_index("ix_units_profile_id", "ix_measurements_profile_id")
     op.rename_table("units", "measurements")
