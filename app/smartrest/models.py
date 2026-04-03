@@ -17,6 +17,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -702,6 +703,219 @@ class MigrationColumnMap(Base):
     table_map = relationship("MigrationTableMap", back_populates="columns")
 
 
+class SourceSystem(Base):
+    __tablename__ = "source_systems"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'readonly', 'disabled')",
+            name="status",
+        ),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    server_name = Column(String(255), nullable=False)
+    cloud_num = Column(Integer, nullable=False)
+    status = Column(
+        String(32),
+        nullable=False,
+        server_default=sa.text("'active'"),
+    )
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    canonical_profiles = relationship("CanonicalProfile", back_populates="source_system")
+    profile_source_maps = relationship("ProfileSourceMap", back_populates="source_system", cascade="all, delete-orphan")
+    canonical_source_maps = relationship("CanonicalSourceMap", back_populates="source_system", cascade="all, delete-orphan")
+
+
+class CanonicalProfile(Base):
+    __tablename__ = "canonical_profiles"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN "
+            "('active', 'suspended', 'deleted')",
+            name="status",
+        ),
+        UniqueConstraint("profile_nick", name="uq_canonical_profiles_profile_nick"),
+        UniqueConstraint(
+            "source_system_id",
+            "profile_id",
+            name="uq_canonical_profiles_source_system_profile_id",
+        ),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    source_system_id = Column(
+        BigInteger,
+        ForeignKey("source_systems.id", ondelete="RESTRICT"),
+        index=True,
+        nullable=False,
+    )
+    profile_id = Column(BigInteger, nullable=False)
+    profile_nick = Column(String(255), nullable=False)
+    status = Column(
+        String(32),
+        nullable=False,
+        server_default=sa.text("'active'"),
+    )
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    source_system = relationship("SourceSystem", back_populates="canonical_profiles")
+    canonical_users = relationship("CanonicalUser", back_populates="canonical_profile", cascade="all, delete-orphan")
+    profile_source_maps = relationship("ProfileSourceMap", back_populates="canonical_profile", cascade="all, delete-orphan")
+
+
+class CanonicalUser(Base):
+    __tablename__ = "canonical_users"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'suspended', 'deleted')",
+            name="status",
+        ),
+        UniqueConstraint(
+            "canonical_profile_id",
+            "user_id",
+            name="uq_canonical_users_profile_user_id",
+        ),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    canonical_profile_id = Column(
+        BigInteger,
+        ForeignKey("canonical_profiles.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    user_id = Column(BigInteger, nullable=False)
+    username = Column(String(255), nullable=True)
+    status = Column(
+        String(32),
+        nullable=False,
+        server_default=sa.text("'active'"),
+    )
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    canonical_profile = relationship("CanonicalProfile", back_populates="canonical_users")
+    canonical_source_maps = relationship("CanonicalSourceMap", back_populates="canonical_user", cascade="all, delete-orphan")
+
+
+class ProfileSourceMap(Base):
+    __tablename__ = "profile_source_maps"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_system_id",
+            "profile_id",
+            name="uq_profile_source_maps_source_system_profile_id",
+        ),
+        UniqueConstraint(
+            "canonical_profile_id",
+            "source_system_id",
+            name="uq_profile_source_maps_canonical_profile_source_system",
+        ),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    source_system_id = Column(
+        BigInteger,
+        ForeignKey("source_systems.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    canonical_profile_id = Column(
+        BigInteger,
+        ForeignKey("canonical_profiles.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    profile_id = Column(BigInteger, nullable=False)
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    source_system = relationship("SourceSystem", back_populates="profile_source_maps")
+    canonical_profile = relationship("CanonicalProfile", back_populates="profile_source_maps")
+
+
+class CanonicalSourceMap(Base):
+    __tablename__ = "canonical_source_maps"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_system_id",
+            "profile_id",
+            "user_id",
+            name="uq_canonical_source_maps_source_profile_user",
+        ),
+        UniqueConstraint(
+            "canonical_user_id",
+            "source_system_id",
+            name="uq_canonical_source_maps_canonical_user_source",
+        ),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    source_system_id = Column(
+        BigInteger,
+        ForeignKey("source_systems.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    canonical_user_id = Column(
+        BigInteger,
+        ForeignKey("canonical_users.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    profile_id = Column(BigInteger, nullable=False)
+    user_id = Column(BigInteger, nullable=False)
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    source_system = relationship("SourceSystem", back_populates="canonical_source_maps")
+    canonical_user = relationship("CanonicalUser", back_populates="canonical_source_maps")
+
+
 def get_sync_engine() -> Engine:
     return get_operational_engine()
 
@@ -740,6 +954,8 @@ __all__ = [
     "MenuItemContent", "OrderPaymentHistory", "Translate",
     # Migration helpers
     "MigrationTableMap", "MigrationColumnMap",
+    # Canonical identity helpers
+    "SourceSystem", "CanonicalProfile", "CanonicalUser", "ProfileSourceMap", "CanonicalSourceMap",
     # Engine/session helpers
     "get_sync_engine", "get_sync_session_factory", "SyncSessionLocal"
 ]
