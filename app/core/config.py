@@ -52,6 +52,20 @@ class Settings(BaseSettings):
             "CHAT_ANALYTICS_DATABASE_URL",
         ),
     )
+    toon_lahmajo_db_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SMARTREST_TOON_LAHMAJO_DB",
+            "TOON_LAHMAJO_DB",
+        ),
+    )
+    scope_backend_mode: Literal["mock", "db_with_fallback", "db_strict"] = "mock"
+    report_backend_mode: Literal["mock", "db_with_fallback", "db_strict"] = "mock"
+    sync_batch_size_profiles: int = Field(default=1000, ge=1, le=50_000)
+    sync_batch_size_users: int = Field(default=2000, ge=1, le=50_000)
+    sync_batch_size_tables: int = Field(default=1000, ge=1, le=50_000)
+    sync_source_system_server_name: str = "toon_lahmajo"
+    sync_source_system_cloud_num: int = 1
 
     model_config = SettingsConfigDict(
         env_prefix="SMARTREST_",

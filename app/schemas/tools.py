@@ -46,6 +46,9 @@ class ResolveScopeRequest(SchemaModel):
 class ResolveScopeResponse(SchemaModel):
     status: AccessStatus
     allowed_report_ids: list[ReportType]
+    source_system_id: int | None = None
+    canonical_profile_id: int | None = None
+    canonical_user_id: int | None = None
     allowed_branch_ids: list[str] | None = None
     allowed_export_modes: list[ExportMode] | None = None
     allowed_metric_ids: list[str] | None = None

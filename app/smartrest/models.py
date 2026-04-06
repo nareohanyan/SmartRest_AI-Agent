@@ -916,6 +916,108 @@ class CanonicalSourceMap(Base):
     canonical_user = relationship("CanonicalUser", back_populates="canonical_source_maps")
 
 
+class SyncState(Base):
+    __tablename__ = "sync_state"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_system_id",
+            "stream_name",
+            name="uq_sync_state_source_stream",
+        ),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    source_system_id = Column(
+        BigInteger,
+        ForeignKey("source_systems.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    stream_name = Column(String(128), nullable=False)
+    last_cursor = Column(BigInteger, nullable=True)
+    last_synced_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    source_system = relationship("SourceSystem")
+
+
+class SyncRun(Base):
+    __tablename__ = "sync_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('running', 'success', 'partial', 'failed')",
+            name="status",
+        ),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    source_system_id = Column(
+        BigInteger,
+        ForeignKey("source_systems.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    status = Column(
+        String(32),
+        nullable=False,
+        server_default=sa.text("'running'"),
+    )
+    started_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    finished_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    profiles_processed = Column(Integer, nullable=False, server_default=sa.text("0"))
+    users_processed = Column(Integer, nullable=False, server_default=sa.text("0"))
+    errors_count = Column(Integer, nullable=False, server_default=sa.text("0"))
+    details = Column(JSONB, nullable=True)
+
+    source_system = relationship("SourceSystem")
+    errors = relationship("SyncError", back_populates="sync_run", cascade="all, delete-orphan")
+
+
+class SyncError(Base):
+    __tablename__ = "sync_errors"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    sync_run_id = Column(
+        BigInteger,
+        ForeignKey("sync_runs.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    source_system_id = Column(
+        BigInteger,
+        ForeignKey("source_systems.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    stream_name = Column(String(128), nullable=False)
+    entity_key = Column(String(255), nullable=True)
+    error_code = Column(String(64), nullable=False)
+    error_message = Column(Text, nullable=False)
+    payload_fragment = Column(JSONB, nullable=True)
+    occurred_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    sync_run = relationship("SyncRun", back_populates="errors")
+    source_system = relationship("SourceSystem")
+
+
 def get_sync_engine() -> Engine:
     return get_operational_engine()
 
@@ -956,6 +1058,7 @@ __all__ = [
     "MigrationTableMap", "MigrationColumnMap",
     # Canonical identity helpers
     "SourceSystem", "CanonicalProfile", "CanonicalUser", "ProfileSourceMap", "CanonicalSourceMap",
+    "SyncState", "SyncRun", "SyncError",
     # Engine/session helpers
     "get_sync_engine", "get_sync_session_factory", "SyncSessionLocal"
 ]
