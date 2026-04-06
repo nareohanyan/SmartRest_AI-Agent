@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy import MetaData, inspect, select, text, update
@@ -11,6 +12,7 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 from sqlalchemy.schema import Table
+from sqlalchemy.sql import sqltypes
 
 from app.core.config import get_settings
 from app.db.source import get_toon_lahmajo_engine
@@ -434,11 +436,18 @@ def _sync_table(
                 )
                 continue
 
-            payload = {column.dst_column: row.get(column.src_column) for column in mapped_columns}
+            payload = _normalize_payload_for_target(
+                raw_payload={
+                    column.dst_column: row.get(column.src_column)
+                    for column in mapped_columns
+                },
+                target_table=target_table,
+            )
             payloads.append(payload)
             row_context.append((row_pk, payload))
 
         if payloads:
+            stop_due_to_row_failure = False
             try:
                 with session.begin_nested():
                     _upsert_payload_batch(
@@ -451,7 +460,6 @@ def _sync_table(
                 cursor = max(pk for pk, _ in row_context)
             except SQLAlchemyError:
                 for row_pk, payload in row_context:
-                    cursor = max(cursor, row_pk)
                     try:
                         with session.begin_nested():
                             _upsert_payload_batch(
@@ -461,6 +469,7 @@ def _sync_table(
                                 pk_columns=pk_columns,
                             )
                         processed += 1
+                        cursor = max(cursor, row_pk)
                     except Exception as exc:  # pragma: no cover - guarded path
                         errors += 1
                         _record_sync_error(
@@ -473,6 +482,8 @@ def _sync_table(
                             error_message=str(exc),
                             payload_fragment={"src_table": mapping.src_table, "pk": row_pk},
                         )
+                        stop_due_to_row_failure = True
+                        break
 
         _upsert_stream_state(
             session=session,
@@ -487,6 +498,8 @@ def _sync_table(
             and batches_processed >= max_batches_per_table
         ):
             stopped_early = True
+            break
+        if payloads and stop_due_to_row_failure:
             break
 
     return TableSyncStats(
@@ -530,6 +543,185 @@ def _get_target_table(
     if dst_table in metadata.tables:
         return metadata.tables[dst_table]
     return Table(dst_table, metadata, autoload_with=target_engine)
+
+
+def _normalize_payload_for_target(
+    *,
+    raw_payload: dict[str, Any],
+    target_table: Table,
+) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for dst_column, value in raw_payload.items():
+        target_column = target_table.c.get(dst_column)
+        if target_column is None:
+            normalized[dst_column] = value
+            continue
+        if _is_nullable_foreign_key(target_column):
+            fk_normalized = _normalize_nullable_fk_sentinel(value)
+            if fk_normalized is None:
+                normalized[dst_column] = None
+                continue
+        normalized[dst_column] = _normalize_value_for_type(
+            value=value,
+            target_type=target_column.type,
+        )
+    return normalized
+
+
+def _normalize_value_for_type(*, value: Any, target_type: sqltypes.TypeEngine[Any]) -> Any:
+    if isinstance(target_type, sqltypes.DateTime):
+        return _normalize_datetime_value(value)
+    if isinstance(target_type, sqltypes.Date):
+        return _normalize_date_value(value)
+    if isinstance(target_type, sqltypes.Boolean):
+        return _normalize_boolean_value(value)
+    if isinstance(target_type, sqltypes.JSON):
+        return _normalize_json_value(value)
+    return value
+
+
+def _normalize_datetime_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        epoch = float(value)
+        if abs(epoch) > 10**12:
+            epoch /= 1000.0
+        return datetime.fromtimestamp(epoch, tz=timezone.utc)
+    if isinstance(value, str):
+        text_value = value.strip()
+        if text_value == "":
+            return None
+        numeric_value = _parse_numeric(text_value)
+        if numeric_value is not None:
+            epoch = numeric_value
+            if abs(epoch) > 10**12:
+                epoch /= 1000.0
+            return datetime.fromtimestamp(epoch, tz=timezone.utc)
+        parsed = _parse_datetime_string(text_value)
+        if parsed is not None:
+            return parsed
+    return value
+
+
+def _normalize_date_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        epoch = float(value)
+        if abs(epoch) > 10**12:
+            epoch /= 1000.0
+        return datetime.fromtimestamp(epoch, tz=timezone.utc).date()
+    if isinstance(value, str):
+        text_value = value.strip()
+        if text_value == "":
+            return None
+        numeric_value = _parse_numeric(text_value)
+        if numeric_value is not None:
+            epoch = numeric_value
+            if abs(epoch) > 10**12:
+                epoch /= 1000.0
+            return datetime.fromtimestamp(epoch, tz=timezone.utc).date()
+        parsed_date = _parse_date_string(text_value)
+        if parsed_date is not None:
+            return parsed_date
+    return value
+
+
+def _normalize_boolean_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if value in (0, 1):
+            return bool(int(value))
+        return value
+    if isinstance(value, str):
+        text_value = value.strip().lower()
+        if text_value == "":
+            return None
+        if text_value in {"1", "true", "t", "yes", "y"}:
+            return True
+        if text_value in {"0", "false", "f", "no", "n"}:
+            return False
+    return value
+
+
+def _normalize_json_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text_value = value.strip()
+        if text_value == "":
+            return None
+        try:
+            return json.loads(text_value)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
+def _is_nullable_foreign_key(column: Any) -> bool:
+    return bool(column.nullable and column.foreign_keys)
+
+
+def _normalize_nullable_fk_sentinel(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if float(value) == 0.0:
+            return None
+        return value
+    if isinstance(value, str):
+        text_value = value.strip()
+        if text_value == "":
+            return None
+        numeric_value = _parse_numeric(text_value)
+        if numeric_value is not None and numeric_value == 0.0:
+            return None
+        return value
+    return value
+
+
+def _parse_numeric(value: str) -> float | None:
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def _parse_datetime_string(value: str) -> datetime | None:
+    normalized = value.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _parse_date_string(value: str) -> date | None:
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        parsed_dt = _parse_datetime_string(value)
+        if parsed_dt is None:
+            return None
+        return parsed_dt.date()
 
 
 def _stream_name(src_table: str) -> str:

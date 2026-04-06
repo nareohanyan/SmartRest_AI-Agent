@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from datetime import date, datetime, timezone
+
 import sqlalchemy as sa
 
 from app.sync.mapped_table_sync import (
     ColumnMapping,
     TableMapping,
     _filter_mappings,
+    _normalize_payload_for_target,
     _order_mappings_by_fk,
     _safe_int,
 )
@@ -78,3 +81,71 @@ def test_safe_int_handles_common_inputs() -> None:
     assert _safe_int("x") is None
     assert _safe_int(None) is None
 
+
+def test_normalize_payload_timestamptz_and_empty_string() -> None:
+    metadata = sa.MetaData()
+    table = sa.Table(
+        "events",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("ended_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    payload = _normalize_payload_for_target(
+        raw_payload={"id": 1, "created_at": 1683819710, "ended_at": ""},
+        target_table=table,
+    )
+    assert payload["id"] == 1
+    assert payload["created_at"] == datetime(2023, 5, 11, 15, 41, 50, tzinfo=timezone.utc)
+    assert payload["ended_at"] is None
+
+
+def test_normalize_payload_boolean_json_and_date() -> None:
+    metadata = sa.MetaData()
+    table = sa.Table(
+        "sample",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("enabled", sa.Boolean, nullable=True),
+        sa.Column("meta", sa.JSON, nullable=True),
+        sa.Column("event_day", sa.Date, nullable=True),
+    )
+    payload = _normalize_payload_for_target(
+        raw_payload={
+            "id": 7,
+            "enabled": "1",
+            "meta": '{"ok": true}',
+            "event_day": "2026-04-06",
+        },
+        target_table=table,
+    )
+    assert payload["id"] == 7
+    assert payload["enabled"] is True
+    assert payload["meta"] == {"ok": True}
+    assert payload["event_day"] == date(2026, 4, 6)
+
+
+def test_normalize_payload_nullable_fk_zero_to_null() -> None:
+    metadata = sa.MetaData()
+    parent = sa.Table(
+        "menu_items",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+    )
+    table = sa.Table(
+        "history",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("menu_item_id", sa.Integer, sa.ForeignKey(parent.c.id), nullable=True),
+    )
+    payload = _normalize_payload_for_target(
+        raw_payload={"id": 1, "menu_item_id": 0},
+        target_table=table,
+    )
+    assert payload["menu_item_id"] is None
+
+    payload = _normalize_payload_for_target(
+        raw_payload={"id": 2, "menu_item_id": "0"},
+        target_table=table,
+    )
+    assert payload["menu_item_id"] is None
