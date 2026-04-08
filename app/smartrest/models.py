@@ -152,7 +152,7 @@ class Order(Base):
     __tablename__ = "orders"
     id = Column(BigInteger, primary_key=True)
     profile_id = Column(BigInteger, ForeignKey("profiles.id", ondelete="CASCADE"), index=True, nullable=False)
-    profile_order_uniq_id = Column(String(64), nullable=True, unique=True)
+    profile_order_uniq_id = Column(String(64), nullable=True, index=True)
     room_table_id = Column(BigInteger, ForeignKey("tables.id"), index=True, nullable=True)
     profile_staff_id = Column(BigInteger, ForeignKey("staff.id"), index=True, nullable=True)
     room_table_status = Column(String(64), nullable=True)

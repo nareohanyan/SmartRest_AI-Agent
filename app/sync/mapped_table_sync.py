@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import MetaData, inspect, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Engine
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 from sqlalchemy.schema import Table
 from sqlalchemy.sql import sqltypes
@@ -471,6 +471,7 @@ def _sync_table(
                         processed += 1
                         cursor = max(cursor, row_pk)
                     except Exception as exc:  # pragma: no cover - guarded path
+                        skippable_error_code = _classify_skippable_row_error(exc)
                         errors += 1
                         _record_sync_error(
                             session=session,
@@ -478,10 +479,13 @@ def _sync_table(
                             source_system_id=source_system_id,
                             stream_name=_stream_name(mapping.src_table),
                             entity_key=str(row_pk),
-                            error_code="mapped_table_upsert_failed",
+                            error_code=skippable_error_code or "mapped_table_upsert_failed",
                             error_message=str(exc),
                             payload_fragment={"src_table": mapping.src_table, "pk": row_pk},
                         )
+                        if skippable_error_code is not None:
+                            cursor = max(cursor, row_pk)
+                            continue
                         stop_due_to_row_failure = True
                         break
 
@@ -591,6 +595,8 @@ def _normalize_datetime_value(value: Any) -> Any:
         return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         epoch = float(value)
+        if epoch == 0:
+            return None
         if abs(epoch) > 10**12:
             epoch /= 1000.0
         return datetime.fromtimestamp(epoch, tz=timezone.utc)
@@ -601,6 +607,8 @@ def _normalize_datetime_value(value: Any) -> Any:
         numeric_value = _parse_numeric(text_value)
         if numeric_value is not None:
             epoch = numeric_value
+            if epoch == 0:
+                return None
             if abs(epoch) > 10**12:
                 epoch /= 1000.0
             return datetime.fromtimestamp(epoch, tz=timezone.utc)
@@ -619,6 +627,8 @@ def _normalize_date_value(value: Any) -> Any:
         return value
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         epoch = float(value)
+        if epoch == 0:
+            return None
         if abs(epoch) > 10**12:
             epoch /= 1000.0
         return datetime.fromtimestamp(epoch, tz=timezone.utc).date()
@@ -629,6 +639,8 @@ def _normalize_date_value(value: Any) -> Any:
         numeric_value = _parse_numeric(text_value)
         if numeric_value is not None:
             epoch = numeric_value
+            if epoch == 0:
+                return None
             if abs(epoch) > 10**12:
                 epoch /= 1000.0
             return datetime.fromtimestamp(epoch, tz=timezone.utc).date()
@@ -722,6 +734,47 @@ def _parse_date_string(value: str) -> date | None:
         if parsed_dt is None:
             return None
         return parsed_dt.date()
+
+
+def _is_foreign_key_violation(exc: Exception) -> bool:
+    if _extract_sqlstate(exc) == "23503":
+        return True
+
+    current: object | None = exc
+    while current is not None:
+        if current.__class__.__name__ == "ForeignKeyViolation":
+            return True
+        current = getattr(current, "orig", None)
+
+    if isinstance(exc, IntegrityError):
+        return "foreign key" in str(exc).lower()
+    return False
+
+
+def _is_invalid_boolean_value_error(exc: Exception) -> bool:
+    sqlstate = _extract_sqlstate(exc)
+    if sqlstate == "22P02" and "boolean" in str(exc).lower():
+        return True
+
+    return "is not none, true, or false" in str(exc).lower()
+
+
+def _classify_skippable_row_error(exc: Exception) -> str | None:
+    if _is_foreign_key_violation(exc):
+        return "mapped_table_fk_missing_parent"
+    if _is_invalid_boolean_value_error(exc):
+        return "mapped_table_invalid_boolean"
+    return None
+
+
+def _extract_sqlstate(exc: Exception) -> str | None:
+    current: object | None = exc
+    while current is not None:
+        value = getattr(current, "sqlstate", None) or getattr(current, "pgcode", None)
+        if isinstance(value, str) and value.strip():
+            return value
+        current = getattr(current, "orig", None)
+    return None
 
 
 def _stream_name(src_table: str) -> str:

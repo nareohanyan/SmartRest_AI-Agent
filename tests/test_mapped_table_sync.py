@@ -7,7 +7,10 @@ import sqlalchemy as sa
 from app.sync.mapped_table_sync import (
     ColumnMapping,
     TableMapping,
+    _classify_skippable_row_error,
     _filter_mappings,
+    _is_foreign_key_violation,
+    _is_invalid_boolean_value_error,
     _normalize_payload_for_target,
     _order_mappings_by_fk,
     _safe_int,
@@ -100,6 +103,23 @@ def test_normalize_payload_timestamptz_and_empty_string() -> None:
     assert payload["ended_at"] is None
 
 
+def test_normalize_payload_timestamptz_zero_epoch_to_null() -> None:
+    metadata = sa.MetaData()
+    table = sa.Table(
+        "events",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("ended_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    payload = _normalize_payload_for_target(
+        raw_payload={"id": 1, "created_at": 0, "ended_at": "0"},
+        target_table=table,
+    )
+    assert payload["created_at"] is None
+    assert payload["ended_at"] is None
+
+
 def test_normalize_payload_boolean_json_and_date() -> None:
     metadata = sa.MetaData()
     table = sa.Table(
@@ -123,6 +143,21 @@ def test_normalize_payload_boolean_json_and_date() -> None:
     assert payload["enabled"] is True
     assert payload["meta"] == {"ok": True}
     assert payload["event_day"] == date(2026, 4, 6)
+
+
+def test_normalize_payload_date_zero_epoch_to_null() -> None:
+    metadata = sa.MetaData()
+    table = sa.Table(
+        "sample",
+        metadata,
+        sa.Column("id", sa.Integer, primary_key=True),
+        sa.Column("event_day", sa.Date, nullable=True),
+    )
+    payload = _normalize_payload_for_target(
+        raw_payload={"id": 7, "event_day": 0},
+        target_table=table,
+    )
+    assert payload["event_day"] is None
 
 
 def test_normalize_payload_nullable_fk_zero_to_null() -> None:
@@ -149,3 +184,39 @@ def test_normalize_payload_nullable_fk_zero_to_null() -> None:
         target_table=table,
     )
     assert payload["menu_item_id"] is None
+
+
+class _FakeDbError(Exception):
+    def __init__(self, *, sqlstate: str | None = None, orig: object | None = None) -> None:
+        super().__init__("fake db error")
+        self.sqlstate = sqlstate
+        self.orig = orig
+
+
+class _ForeignKeyViolation:
+    pass
+
+
+def test_is_foreign_key_violation_detects_sqlstate() -> None:
+    exc = _FakeDbError(sqlstate="23503")
+    assert _is_foreign_key_violation(exc) is True
+
+
+def test_is_foreign_key_violation_detects_orig_class_name() -> None:
+    exc = _FakeDbError(orig=_ForeignKeyViolation())
+    assert _is_foreign_key_violation(exc) is True
+
+
+def test_is_foreign_key_violation_ignores_other_sqlstate() -> None:
+    exc = _FakeDbError(sqlstate="23505")
+    assert _is_foreign_key_violation(exc) is False
+
+
+def test_is_invalid_boolean_value_error_detects_message() -> None:
+    exc = ValueError("Value 2 is not None, True, or False")
+    assert _is_invalid_boolean_value_error(exc) is True
+
+
+def test_classify_skippable_row_error_for_boolean() -> None:
+    exc = ValueError("Value 2 is not None, True, or False")
+    assert _classify_skippable_row_error(exc) == "mapped_table_invalid_boolean"
