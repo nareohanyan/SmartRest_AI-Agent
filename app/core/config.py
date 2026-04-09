@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     )
     scope_backend_mode: Literal["mock", "db_with_fallback", "db_strict"] = "mock"
     report_backend_mode: Literal["mock", "db_with_fallback", "db_strict"] = "mock"
+    analytics_backend_mode: Literal["mock", "db_with_fallback", "db_strict"] = "mock"
     sync_batch_size_profiles: int = Field(default=1000, ge=1, le=50_000)
     sync_batch_size_users: int = Field(default=2000, ge=1, le=50_000)
     sync_batch_size_tables: int = Field(default=1000, ge=1, le=50_000)

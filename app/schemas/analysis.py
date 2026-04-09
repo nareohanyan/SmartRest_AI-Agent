@@ -138,10 +138,18 @@ class AnalysisPlan(SchemaModel):
         return self
 
 
+class RetrievalScope(SchemaModel):
+    profile_id: int = Field(ge=1)
+    branch_ids: list[int] = Field(default_factory=list)
+    source: str | None = Field(default=None, min_length=1)
+    timezone: str | None = Field(default=None, min_length=1)
+
+
 class TotalMetricRequest(SchemaModel):
     metric: MetricName
     date_from: date
     date_to: date
+    scope: RetrievalScope | None = None
 
 
 class TotalMetricResponse(SchemaModel):
@@ -164,6 +172,7 @@ class BreakdownRequest(SchemaModel):
     dimension: DimensionName
     date_from: date
     date_to: date
+    scope: RetrievalScope | None = None
 
 
 class BreakdownResponse(SchemaModel):
@@ -186,6 +195,7 @@ class TimeseriesRequest(SchemaModel):
     date_from: date
     date_to: date
     dimension: DimensionName = DimensionName.DAY
+    scope: RetrievalScope | None = None
 
 
 class TimeseriesResponse(SchemaModel):

@@ -742,7 +742,8 @@ def _is_foreign_key_violation(exc: Exception) -> bool:
 
     current: object | None = exc
     while current is not None:
-        if current.__class__.__name__ == "ForeignKeyViolation":
+        class_name = current.__class__.__name__.lower()
+        if "foreign" in class_name and "key" in class_name:
             return True
         current = getattr(current, "orig", None)
 

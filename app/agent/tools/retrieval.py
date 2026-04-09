@@ -5,7 +5,9 @@ from decimal import Decimal
 
 from app.agent.formula_ast import evaluate_formula_ast
 from app.agent.metric_registry import MetricType, get_metric_registry
+from app.agent.services.live_analytics import get_live_analytics_service
 from app.agent.tools.math_helpers import quantize_decimal
+from app.core.config import get_settings
 from app.schemas.analysis import (
     BreakdownItem,
     BreakdownRequest,
@@ -166,6 +168,13 @@ def _metric_value_for_day(metric: MetricName, day_index: int) -> Decimal:
 
 
 def fetch_total_metric_tool(request: TotalMetricRequest) -> TotalMetricResponse:
+    if request.scope is not None and _use_live_analytics():
+        try:
+            return get_live_analytics_service().get_total_metric(request)
+        except Exception:
+            if _analytics_backend_mode() == "db_strict":
+                raise
+
     aggregated_base_metrics: dict[str, Decimal] = {
         "sales_total": Decimal("0"),
         "order_count": Decimal("0"),
@@ -212,6 +221,13 @@ def fetch_total_metric_tool(request: TotalMetricRequest) -> TotalMetricResponse:
 
 
 def fetch_breakdown_tool(request: BreakdownRequest) -> BreakdownResponse:
+    if request.scope is not None and _use_live_analytics():
+        try:
+            return get_live_analytics_service().get_breakdown(request)
+        except Exception:
+            if _analytics_backend_mode() == "db_strict":
+                raise
+
     bucket_weights = _DIMENSION_BUCKET_WEIGHTS.get(request.dimension)
     if bucket_weights is None:
         raise ValueError(f"unsupported dimension: {request.dimension}")
@@ -240,6 +256,13 @@ def fetch_breakdown_tool(request: BreakdownRequest) -> BreakdownResponse:
 
 
 def fetch_timeseries_tool(request: TimeseriesRequest) -> TimeseriesResponse:
+    if request.scope is not None and _use_live_analytics():
+        try:
+            return get_live_analytics_service().get_timeseries(request)
+        except Exception:
+            if _analytics_backend_mode() == "db_strict":
+                raise
+
     if request.dimension is not DimensionName.DAY:
         raise ValueError("demo timeseries retrieval currently supports day dimension only")
 
@@ -261,3 +284,11 @@ def fetch_timeseries_tool(request: TimeseriesRequest) -> TimeseriesResponse:
         points=points,
         warnings=warnings,
     )
+
+
+def _analytics_backend_mode() -> str:
+    return getattr(get_settings(), "analytics_backend_mode", "mock")
+
+
+def _use_live_analytics() -> bool:
+    return _analytics_backend_mode() != "mock"

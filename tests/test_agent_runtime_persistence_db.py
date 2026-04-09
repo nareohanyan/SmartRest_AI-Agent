@@ -16,6 +16,7 @@ from app.schemas.agent import RunStatus
 from app.services.agent_runtime import AgentRuntimeExecutionError, AgentRuntimeService
 
 _VERIFIED_IDENTITY = VerifiedIdentity(profile_nick="nick", user_id=101, profile_id=201)
+pytestmark = pytest.mark.integration
 
 
 def _chat_analytics_database_url() -> str:
@@ -23,7 +24,10 @@ def _chat_analytics_database_url() -> str:
         "CHAT_ANALYTICS_DATABASE_URL"
     )
     if not db_url:
-        pytest.skip("CHAT_ANALYTICS_DATABASE_URL is not set; skipping DB integration tests.")
+        raise pytest.UsageError(
+            "Runtime persistence DB integration tests require "
+            "SMARTREST_CHAT_ANALYTICS_DATABASE_URL or CHAT_ANALYTICS_DATABASE_URL."
+        )
     return db_url
 
 
@@ -44,7 +48,10 @@ def analytics_engine() -> Iterator[Engine]:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
     except Exception as exc:
-        pytest.skip(f"Chat analytics DB is not reachable: {exc}")
+        raise pytest.UsageError(
+            "Runtime persistence DB integration tests require a reachable Postgres database. "
+            f"Connection error: {exc}"
+        ) from exc
 
     Base.metadata.create_all(engine)
     yield engine

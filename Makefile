@@ -14,8 +14,9 @@ MIGRATIONS_DIR ?= migrations/chat_analytics/versions
 SMARTREST_MIGRATIONS_DIR ?= migrations/smartrest/versions
 
 .PHONY: help setup up app-up db-up down down-v ps logs db-logs db-shell db-list db-chat-tables \
-		build lint typecheck test precommit quality migrate current revision migrate-smartrest \
-		current-smartrest revision-smartrest run-8010 sync-toon-identities sync-toon-smartrest sync-toon-smartrest-step
+		build lint typecheck test test-integration test-post-sync test-all precommit quality \
+		migrate current revision migrate-smartrest current-smartrest revision-smartrest \
+		run-8010 sync-toon-identities sync-toon-smartrest sync-toon-smartrest-step
 
 help:
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -71,6 +72,15 @@ typecheck:
 
 test:
 	$(PYTHON) -m pytest
+
+test-integration:
+	$(PYTHON) -m pytest -m integration
+
+test-post-sync:
+	$(PYTHON) -m pytest -m post_sync
+
+test-all:
+	$(PYTHON) -m pytest --run-all-tests
 
 precommit:
 	PRE_COMMIT_HOME=$(PRE_COMMIT_HOME) $(PRE_COMMIT) run --all-files

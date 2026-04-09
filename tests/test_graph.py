@@ -10,8 +10,9 @@ from typing import Any
 import pytest
 
 import app.agent.graph as graph_module
-from app.agent.graph import _reject_node, build_agent_graph
+from app.agent.graph import _build_retrieval_scope, _reject_node, build_agent_graph
 from app.agent.llm.exceptions import LLMClientError
+from app.agent.report_tools import resolve_scope_tool
 from app.agent.tool_registry import ToolId
 from app.schemas.agent import AgentState, LLMErrorCategory, PolicyRoute, RunStatus
 from app.schemas.analysis import DimensionName, MetricName
@@ -218,6 +219,23 @@ def test_ru_comparison_routes_to_dynamic_comparison_path() -> None:
     ]
     assert all(step.status.value == "success" for step in final_state.execution_trace)
     assert "tool:synthetic_data" in final_state.warnings
+
+
+def test_build_retrieval_scope_uses_requested_branch_ids_when_present() -> None:
+    state = AgentState.model_validate(
+        _initial_state(
+            "Show sales by branch 2026-03-01 to 2026-03-07",
+            scope_payload_overrides={"requested_branch_ids": ["branch_4", "9", "invalid"]},
+        )
+    )
+    assert state.scope_request is not None
+    state.user_scope = resolve_scope_tool(state.scope_request)
+
+    scope = _build_retrieval_scope(state)
+
+    assert scope is not None
+    assert scope.profile_id == 201
+    assert scope.branch_ids == [4, 9]
 
 
 def test_compound_kpi_request_routes_to_multi_report_path() -> None:
@@ -573,6 +591,7 @@ def test_llm_planning_valid_payload_is_used_without_fallback(
 
     assert len(fake_client.calls) >= 1
     assert final_state.status is RunStatus.COMPLETED
+    assert final_state.plan_source is not None
     assert final_state.plan_source.value == "llm"
     assert final_state.plan_confidence == 0.95
 
@@ -591,6 +610,7 @@ def test_invalid_llm_plan_payload_falls_back_to_deterministic(
     )
 
     assert final_state.status is RunStatus.COMPLETED
+    assert final_state.plan_source is not None
     assert final_state.plan_source.value == "fallback"
     assert "planner_contract_or_config_fallback" in final_state.warnings
 
@@ -630,6 +650,7 @@ def test_low_confidence_llm_plan_falls_back_with_distinct_warning(
     )
 
     assert final_state.status is RunStatus.COMPLETED
+    assert final_state.plan_source is not None
     assert final_state.plan_source.value == "fallback"
     assert "planner_low_confidence_fallback" in final_state.warnings
     assert "planner_contract_or_config_fallback" not in final_state.warnings
@@ -653,6 +674,7 @@ def test_llm_error_falls_back_with_distinct_warning(
     )
 
     assert final_state.status is RunStatus.COMPLETED
+    assert final_state.plan_source is not None
     assert final_state.plan_source.value == "fallback"
     assert "planner_llm_error_fallback" in final_state.warnings
     assert "planner_low_confidence_fallback" not in final_state.warnings

@@ -46,6 +46,7 @@ from app.schemas.analysis import (
     LegacyReportTaskResult,
     MovingAverageRequest,
     RankItemsRequest,
+    RetrievalScope,
     TimeseriesRequest,
     ToolWarningCode,
     TotalMetricRequest,
@@ -106,6 +107,65 @@ def _clarification_fallback_question(language: str) -> str:
     if language == "ru":
         return "Пожалуйста, уточните запрос."
     return "Please clarify your request."
+
+
+def _parse_branch_id(raw_branch_id: str) -> int | None:
+    normalized = raw_branch_id.strip()
+    if normalized.startswith("branch_"):
+        normalized = normalized[len("branch_") :]
+    try:
+        return int(normalized)
+    except ValueError:
+        return None
+
+
+def _normalize_branch_ids(raw_branch_ids: list[str] | None) -> list[int]:
+    if not raw_branch_ids:
+        return []
+
+    branch_ids: list[int] = []
+    seen: set[int] = set()
+    for raw_branch_id in raw_branch_ids:
+        parsed = _parse_branch_id(raw_branch_id)
+        if parsed is None or parsed in seen:
+            continue
+        seen.add(parsed)
+        branch_ids.append(parsed)
+    return branch_ids
+
+
+def _scoped_branch_ids(state: AgentState) -> list[int]:
+    requested_branch_ids = (
+        state.scope_request.requested_branch_ids
+        if state.scope_request is not None
+        else None
+    )
+    if requested_branch_ids:
+        return _normalize_branch_ids(requested_branch_ids)
+
+    scope = state.user_scope
+    if scope is None:
+        return []
+
+    allowed_branch_ids = scope.allowed_branch_ids or []
+    if "*" in allowed_branch_ids:
+        return []
+    return _normalize_branch_ids(allowed_branch_ids)
+
+
+def _build_retrieval_scope(state: AgentState) -> RetrievalScope | None:
+    if state.scope_request is None:
+        return None
+
+    source = None
+    if state.filters is not None:
+        source = state.filters.source
+
+    return RetrievalScope(
+        profile_id=state.scope_request.profile_id,
+        branch_ids=_scoped_branch_ids(state),
+        source=source,
+    )
 
 
 def _map_analysis_intent_to_runtime_intent(analysis_intent: AnalysisIntent) -> IntentType:
@@ -733,11 +793,13 @@ def _run_comparison_node(state: AgentState) -> dict[str, Any]:
 
     tool_registry = get_tool_registry()
     execution_trace = state.execution_trace
+    retrieval_scope = _build_retrieval_scope(state)
 
     current_request = TotalMetricRequest(
         metric=plan.retrieval.metric,
         date_from=plan.retrieval.date_from,
         date_to=plan.retrieval.date_to,
+        scope=retrieval_scope,
     )
     current_started_at = perf_counter()
     current = tool_registry.invoke(ToolId.FETCH_TOTAL_METRIC, current_request)
@@ -754,6 +816,7 @@ def _run_comparison_node(state: AgentState) -> dict[str, Any]:
         metric=plan.previous_period_retrieval.metric,
         date_from=plan.previous_period_retrieval.date_from,
         date_to=plan.previous_period_retrieval.date_to,
+        scope=retrieval_scope,
     )
     previous_started_at = perf_counter()
     previous = tool_registry.invoke(ToolId.FETCH_TOTAL_METRIC, previous_request)
@@ -843,12 +906,14 @@ def _run_ranking_node(state: AgentState) -> dict[str, Any]:
     tool_registry = get_tool_registry()
     execution_trace = state.execution_trace
     requested_dimension = plan.retrieval.dimension or DimensionName.SOURCE
+    retrieval_scope = _build_retrieval_scope(state)
 
     breakdown_request = BreakdownRequest(
         metric=plan.retrieval.metric,
         dimension=requested_dimension,
         date_from=plan.retrieval.date_from,
         date_to=plan.retrieval.date_to,
+        scope=retrieval_scope,
     )
     breakdown_started_at = perf_counter()
     breakdown = tool_registry.invoke(ToolId.FETCH_BREAKDOWN, breakdown_request)
@@ -923,11 +988,13 @@ def _run_trend_node(state: AgentState) -> dict[str, Any]:
 
     tool_registry = get_tool_registry()
     execution_trace = state.execution_trace
+    retrieval_scope = _build_retrieval_scope(state)
     timeseries_request = TimeseriesRequest(
         metric=plan.retrieval.metric,
         date_from=plan.retrieval.date_from,
         date_to=plan.retrieval.date_to,
         dimension=DimensionName.DAY,
+        scope=retrieval_scope,
     )
     timeseries_started_at = perf_counter()
     timeseries = tool_registry.invoke(ToolId.FETCH_TIMESERIES, timeseries_request)

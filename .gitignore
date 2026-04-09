@@ -8,6 +8,8 @@ guide.md
 improvements.md
 smartrest_metric_registry_blueprint.json
 tomorrow_sync_readiness_plan.md
+afterwards.md
+recommendations.md
 # Local environment
 .venv/
 .env

@@ -11,6 +11,8 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 
+pytestmark = pytest.mark.integration
+
 REQUIRED_TABLES = {
     "chats",
     "chat_events",
@@ -54,7 +56,10 @@ def _chat_analytics_database_url() -> str:
         "CHAT_ANALYTICS_DATABASE_URL"
     )
     if not db_url:
-        pytest.skip("CHAT_ANALYTICS_DATABASE_URL is not set; skipping migration tests.")
+        raise pytest.UsageError(
+            "Migration integration tests require SMARTREST_CHAT_ANALYTICS_DATABASE_URL or "
+            "CHAT_ANALYTICS_DATABASE_URL."
+        )
     return db_url
 
 
@@ -109,7 +114,10 @@ def isolated_schema_db_url() -> Iterator[tuple[str, str]]:
                 connection.execute(text(f'CREATE SCHEMA "{schema_name}"'))
             schema_created = True
         except Exception as exc:
-            pytest.skip(f"Chat analytics DB is not reachable: {exc}")
+            raise pytest.UsageError(
+                "Chat analytics migration tests require a reachable Postgres database. "
+                f"Connection error: {exc}"
+            ) from exc
         migration_db_url = _migration_database_url(base_db_url, schema_name)
         yield schema_name, migration_db_url
     finally:

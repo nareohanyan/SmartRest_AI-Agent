@@ -13,13 +13,18 @@ from app.persistence.chat_analytics_repository import ChatAnalyticsRepository
 from app.persistence.errors import PersistenceNotFoundError, PersistenceValidationError
 from app.schemas.agent import RunStatus
 
+pytestmark = pytest.mark.integration
+
 
 def _chat_analytics_database_url() -> str:
     db_url = os.getenv("SMARTREST_CHAT_ANALYTICS_DATABASE_URL") or os.getenv(
         "CHAT_ANALYTICS_DATABASE_URL"
     )
     if not db_url:
-        pytest.skip("CHAT_ANALYTICS_DATABASE_URL is not set; skipping repository DB tests.")
+        raise pytest.UsageError(
+            "Integration tests require SMARTREST_CHAT_ANALYTICS_DATABASE_URL or "
+            "CHAT_ANALYTICS_DATABASE_URL."
+        )
     return db_url
 
 
@@ -40,7 +45,10 @@ def analytics_engine() -> Iterator[Engine]:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
     except Exception as exc:
-        pytest.skip(f"Chat analytics DB is not reachable: {exc}")
+        raise pytest.UsageError(
+            "Chat analytics DB integration tests require a reachable Postgres database. "
+            f"Connection error: {exc}"
+        ) from exc
 
     Base.metadata.create_all(engine)
     yield engine

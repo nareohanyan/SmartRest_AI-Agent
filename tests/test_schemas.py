@@ -8,7 +8,14 @@ import pytest
 from pydantic import ValidationError
 
 from app.schemas.agent import AgentState, IntentType, RunStatus
-from app.schemas.analysis import DimensionName, MetricName
+from app.schemas.analysis import (
+    BreakdownRequest,
+    DimensionName,
+    MetricName,
+    RetrievalScope,
+    TimeseriesRequest,
+    TotalMetricRequest,
+)
 from app.schemas.reports import (
     ReportDefinition,
     ReportFilterKey,
@@ -313,6 +320,47 @@ def test_resolve_scope_request_accepts_requested_branch_and_export() -> None:
 
     assert scope_request.requested_branch_ids == ["branch_1"]
     assert scope_request.requested_export_mode is ExportMode.CSV
+
+
+def test_analysis_retrieval_requests_accept_live_scope() -> None:
+    scope = RetrievalScope.model_validate(
+        {
+            "profile_id": 42,
+            "branch_ids": [7, 8],
+            "source": "glovo",
+        }
+    )
+
+    total_request = TotalMetricRequest.model_validate(
+        {
+            "metric": "sales_total",
+            "date_from": "2026-03-01",
+            "date_to": "2026-03-07",
+            "scope": scope.model_dump(),
+        }
+    )
+    breakdown_request = BreakdownRequest.model_validate(
+        {
+            "metric": "sales_total",
+            "dimension": "branch",
+            "date_from": "2026-03-01",
+            "date_to": "2026-03-07",
+            "scope": scope.model_dump(),
+        }
+    )
+    timeseries_request = TimeseriesRequest.model_validate(
+        {
+            "metric": "sales_total",
+            "date_from": "2026-03-01",
+            "date_to": "2026-03-07",
+            "dimension": "day",
+            "scope": scope.model_dump(),
+        }
+    )
+
+    assert total_request.scope == scope
+    assert breakdown_request.scope == scope
+    assert timeseries_request.scope == scope
 
 
 def test_list_reports_contracts_valid_and_invalid() -> None:
