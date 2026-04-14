@@ -524,18 +524,42 @@ def _upsert_payload_batch(
     payloads: list[dict[str, Any]],
     pk_columns: list[str],
 ) -> None:
+    conflict_columns = _upsert_conflict_columns(target_table=target_table, pk_columns=pk_columns)
     stmt = pg_insert(target_table).values(payloads)
-    mutable_columns = [column for column in payloads[0].keys() if column not in pk_columns]
+    mutable_columns = _upsert_mutable_columns(
+        payload=payloads[0],
+        pk_columns=pk_columns,
+        conflict_columns=conflict_columns,
+    )
     if mutable_columns:
         stmt = stmt.on_conflict_do_update(
-            index_elements=[target_table.c[column] for column in pk_columns],
+            index_elements=[target_table.c[column] for column in conflict_columns],
             set_={column: stmt.excluded[column] for column in mutable_columns},
         )
     else:
         stmt = stmt.on_conflict_do_nothing(
-            index_elements=[target_table.c[column] for column in pk_columns],
+            index_elements=[target_table.c[column] for column in conflict_columns],
         )
     session.execute(stmt)
+
+
+def _upsert_conflict_columns(*, target_table: Table, pk_columns: list[str]) -> list[str]:
+    # `translate` is keyed semantically by the source phrase; the source table
+    # contains duplicate numeric IDs for the same phrase, while Postgres enforces
+    # uniqueness on `string`.
+    if target_table.name == "translate" and "string" in target_table.c:
+        return ["string"]
+    return pk_columns
+
+
+def _upsert_mutable_columns(
+    *,
+    payload: dict[str, Any],
+    pk_columns: list[str],
+    conflict_columns: list[str],
+) -> list[str]:
+    immutable_columns = set(pk_columns) | set(conflict_columns)
+    return [column for column in payload.keys() if column not in immutable_columns]
 
 
 def _get_target_table(

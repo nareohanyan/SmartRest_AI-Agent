@@ -14,6 +14,8 @@ from app.sync.mapped_table_sync import (
     _normalize_payload_for_target,
     _order_mappings_by_fk,
     _safe_int,
+    _upsert_conflict_columns,
+    _upsert_mutable_columns,
 )
 
 
@@ -220,3 +222,34 @@ def test_is_invalid_boolean_value_error_detects_message() -> None:
 def test_classify_skippable_row_error_for_boolean() -> None:
     exc = ValueError("Value 2 is not None, True, or False")
     assert _classify_skippable_row_error(exc) == "mapped_table_invalid_boolean"
+
+
+def test_translate_upsert_conflicts_on_string() -> None:
+    metadata = sa.MetaData()
+    table = sa.Table(
+        "translate",
+        metadata,
+        sa.Column("Id", sa.BigInteger, primary_key=True),
+        sa.Column("string", sa.String(255), nullable=False, unique=True),
+        sa.Column("en", sa.Text, nullable=True),
+        sa.Column("hy", sa.Text, nullable=True),
+        sa.Column("ru", sa.Text, nullable=True),
+    )
+
+    assert _upsert_conflict_columns(target_table=table, pk_columns=["Id"]) == ["string"]
+
+
+def test_translate_upsert_does_not_mutate_primary_key_on_string_conflict() -> None:
+    mutable_columns = _upsert_mutable_columns(
+        payload={
+            "Id": 518,
+            "string": "Ներկա սեղանների ընդհանուր հաշիվ",
+            "en": "Total bill of current orders",
+            "hy": "Ներկա սեղանների ընդհանուր հաշիվ",
+            "ru": "Общая сумма занятых столов",
+        },
+        pk_columns=["Id"],
+        conflict_columns=["string"],
+    )
+
+    assert mutable_columns == ["en", "hy", "ru"]

@@ -450,7 +450,7 @@ class MaterialCategoryLanguage(Base, TimestampMixin):
     deleted = Column(Boolean, nullable=True, server_default=sa.text("false"))
     archived = Column(Boolean, nullable=True, server_default=sa.text("false"))
     profile_id = Column(BigInteger, ForeignKey("profiles.id", ondelete="CASCADE"), index=True, nullable=False)
-    language_id = Column(BigInteger, nullable=True)
+    language_id = Column(String(255), nullable=True)
     title = Column(String(255), nullable=True)
     material_category_id = Column(BigInteger, ForeignKey("material_category.id"), index=True, nullable=True)
 
@@ -461,7 +461,7 @@ class MaterialLanguage(Base, TimestampMixin):
     deleted = Column(Boolean, nullable=True, server_default=sa.text("false"))
     archived = Column(Boolean, nullable=True, server_default=sa.text("false"))
     profile_id = Column(BigInteger, ForeignKey("profiles.id", ondelete="CASCADE"), index=True, nullable=False)
-    language_id = Column(BigInteger, nullable=True)
+    language_id = Column(String(255), nullable=True)
     title = Column(String(255), nullable=True)
     material_id = Column(BigInteger, ForeignKey("materials.id"), index=True, nullable=True)
 
@@ -480,7 +480,7 @@ class StoreLanguage(Base, TimestampMixin):
     deleted = Column(Boolean, nullable=True, server_default=sa.text("false"))
     archived = Column(Boolean, nullable=True, server_default=sa.text("false"))
     profile_id = Column(BigInteger, ForeignKey("profiles.id", ondelete="CASCADE"), index=True, nullable=False)
-    language_id = Column(BigInteger, nullable=True)
+    language_id = Column(String(255), nullable=True)
     title = Column(String(255), nullable=True)
     store_id = Column(BigInteger, ForeignKey("stores.id"), nullable=True)
 
@@ -499,7 +499,7 @@ class MeasurementLanguage(Base, TimestampMixin):
     deleted = Column(Boolean, nullable=True, server_default=sa.text("false"))
     archived = Column(Boolean, nullable=True, server_default=sa.text("false"))
     profile_id = Column(BigInteger, ForeignKey("profiles.id", ondelete="CASCADE"), index=True, nullable=False)
-    language_id = Column(BigInteger, nullable=True)
+    language_id = Column(String(255), nullable=True)
     title = Column(String(255), nullable=True)
     unit_id = Column(BigInteger, ForeignKey("units.id"), index=True, nullable=True)
 
@@ -669,7 +669,7 @@ class OrderPaymentHistory(Base, TimestampMixin):
 class Translate(Base):
     __tablename__ = "translate"
     id = Column("Id", BigInteger, primary_key=True)
-    string = Column(String(255), nullable=False, unique=True, index=True)
+    string = Column(String(1000), nullable=False, unique=True, index=True)
     en = Column(Text, nullable=True)
     hy = Column(Text, nullable=True)
     ru = Column(Text, nullable=True)
