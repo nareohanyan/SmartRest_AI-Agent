@@ -1,4 +1,4 @@
-"""Deterministic report tool layer."""
+"""SmartRest report tool layer."""
 
 from __future__ import annotations
 
@@ -6,13 +6,11 @@ from enum import Enum
 from typing import TypeVar
 
 from app.core.config import get_settings
+from app.core.runtime_policy import require_strict_backend_mode
 from app.reports import (
     REPORT_CATALOG_ORDER,
-    SMARTREST_BACKEND_FALLBACK_WARNING,
-    SmartRestReportBackendUnsupportedError,
     get_report_definition,
     list_report_definitions,
-    run_mock_report,
     run_smartrest_report,
 )
 from app.schemas.analysis import DimensionName, MetricName
@@ -31,7 +29,6 @@ from app.schemas.tools import (
 )
 from app.services.canonical_identity import get_canonical_identity_resolver
 
-_MOCK_DENIAL_REASON = "mock_access_denied"
 _IDENTITY_NOT_MAPPED_REASON = "identity_not_mapped"
 _SCOPE_DB_UNAVAILABLE_REASON = "scope_db_unavailable"
 _CSV_SEPARATOR = ","
@@ -74,43 +71,6 @@ def _parse_source_cloud_num(metadata: dict[str, str]) -> int | None:
         return int(raw_value)
     except ValueError:
         return None
-
-
-def _resolve_scope_from_mock(request: ResolveScopeRequest) -> ResolveScopeResponse:
-    return ResolveScopeResponse(
-        status=AccessStatus.GRANTED,
-        allowed_report_ids=list(REPORT_CATALOG_ORDER),
-        allowed_branch_ids=_parse_csv(metadata=request.metadata, key="allow_branch_ids"),
-        allowed_export_modes=_parse_enum_csv(
-            metadata=request.metadata,
-            key="allow_export_modes",
-            enum_type=ExportMode,
-        ),
-        allowed_metric_ids=(
-            _parse_csv(metadata=request.metadata, key="allow_metric_ids")
-            or _parse_csv(metadata=request.metadata, key="allow_metrics")
-        ),
-        allowed_dimension_ids=(
-            _parse_csv(metadata=request.metadata, key="allow_dimension_ids")
-            or _parse_csv(metadata=request.metadata, key="allow_dimensions")
-        ),
-        allowed_metrics=_parse_enum_csv(
-            metadata=request.metadata,
-            key="allow_metrics",
-            enum_type=MetricName,
-        ),
-        allowed_dimensions=_parse_enum_csv(
-            metadata=request.metadata,
-            key="allow_dimensions",
-            enum_type=DimensionName,
-        ),
-        allowed_tool_operations=_parse_enum_csv(
-            metadata=request.metadata,
-            key="allow_tool_operations",
-            enum_type=ToolOperation,
-        ),
-        denial_reason=None,
-    )
 
 
 def _resolve_scope_from_db(request: ResolveScopeRequest) -> ResolveScopeResponse:
@@ -178,28 +138,21 @@ def _resolve_scope_from_db(request: ResolveScopeRequest) -> ResolveScopeResponse
 
 
 def resolve_scope_tool(request: ResolveScopeRequest) -> ResolveScopeResponse:
-    """Resolve access scope from canonical DB identity with controlled fallback."""
-    if request.metadata.get("access") == "deny":
-        return ResolveScopeResponse(
-            status=AccessStatus.DENIED,
-            allowed_report_ids=[],
-            denial_reason=_MOCK_DENIAL_REASON,
-        )
-
+    """Resolve access scope from canonical DB identity."""
     settings = get_settings()
-    if settings.scope_backend_mode == "mock":
-        return _resolve_scope_from_mock(request)
-
+    require_strict_backend_mode(
+        settings=settings,
+        field_name="scope_backend_mode",
+        actual_mode=settings.scope_backend_mode,
+    )
     try:
         return _resolve_scope_from_db(request)
     except Exception:
-        if settings.scope_backend_mode == "db_strict":
-            return ResolveScopeResponse(
-                status=AccessStatus.DENIED,
-                allowed_report_ids=[],
-                denial_reason=_SCOPE_DB_UNAVAILABLE_REASON,
-            )
-        return _resolve_scope_from_mock(request)
+        return ResolveScopeResponse(
+            status=AccessStatus.DENIED,
+            allowed_report_ids=[],
+            denial_reason=_SCOPE_DB_UNAVAILABLE_REASON,
+        )
 
 
 def list_reports_tool(request: ListReportsRequest) -> ListReportsResponse:
@@ -215,22 +168,11 @@ def get_report_definition_tool(
 
 
 def run_report_tool(request: RunReportRequest) -> RunReportResponse:
-    """Execute report from SmartRest DB backend with fallback to deterministic mock data."""
+    """Execute report from SmartRest DB backend."""
     settings = get_settings()
-    if settings.report_backend_mode == "mock":
-        return run_mock_report(request.request)
-
-    try:
-        return run_smartrest_report(request.request, profile_id=request.profile_id)
-    except SmartRestReportBackendUnsupportedError:
-        if settings.report_backend_mode == "db_strict":
-            raise
-    except Exception:
-        if settings.report_backend_mode == "db_strict":
-            raise
-
-    fallback = run_mock_report(request.request)
-    merged_warnings = list(fallback.warnings)
-    if SMARTREST_BACKEND_FALLBACK_WARNING not in merged_warnings:
-        merged_warnings.append(SMARTREST_BACKEND_FALLBACK_WARNING)
-    return RunReportResponse(result=fallback.result, warnings=merged_warnings)
+    require_strict_backend_mode(
+        settings=settings,
+        field_name="report_backend_mode",
+        actual_mode=settings.report_backend_mode,
+    )
+    return run_smartrest_report(request.request, profile_id=request.profile_id)

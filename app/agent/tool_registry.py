@@ -12,6 +12,11 @@ from app.agent.tools.analytics import (
     moving_average_tool,
     trend_slope_tool,
 )
+from app.agent.tools.business_insights import (
+    fetch_customer_summary_tool,
+    fetch_item_performance_tool,
+    fetch_receipt_summary_tool,
+)
 from app.agent.tools.ranking import bottom_k_tool, top_k_tool
 from app.agent.tools.retrieval import (
     fetch_breakdown_tool,
@@ -21,8 +26,11 @@ from app.agent.tools.retrieval import (
 from app.schemas.analysis import (
     BreakdownRequest,
     BreakdownResponse,
+    CustomerSummaryRequest,
+    ItemPerformanceRequest,
     MovingAverageRequest,
     RankItemsRequest,
+    ReceiptSummaryRequest,
     TimeseriesRequest,
     TotalMetricRequest,
     TrendSlopeRequest,
@@ -38,6 +46,9 @@ class ToolId(str, Enum):
     FETCH_TOTAL_METRIC = "fetch_total_metric"
     FETCH_BREAKDOWN = "fetch_breakdown"
     FETCH_TIMESERIES = "fetch_timeseries"
+    FETCH_ITEM_PERFORMANCE = "fetch_item_performance"
+    FETCH_CUSTOMER_SUMMARY = "fetch_customer_summary"
+    FETCH_RECEIPT_SUMMARY = "fetch_receipt_summary"
     ATTACH_BREAKDOWN_SHARE = "attach_breakdown_share"
     TOP_K = "top_k"
     BOTTOM_K = "bottom_k"
@@ -106,19 +117,37 @@ def _build_default_specs() -> list[ToolSpec]:
             tool_id=ToolId.FETCH_TOTAL_METRIC,
             request_type=TotalMetricRequest,
             handler=fetch_total_metric_tool,
-            description="Fetch synthetic total metric for a time range.",
+            description="Fetch SmartRest total metric for a time range.",
         ),
         ToolSpec(
             tool_id=ToolId.FETCH_BREAKDOWN,
             request_type=BreakdownRequest,
             handler=fetch_breakdown_tool,
-            description="Fetch synthetic metric breakdown for a time range.",
+            description="Fetch SmartRest metric breakdown for a time range.",
         ),
         ToolSpec(
             tool_id=ToolId.FETCH_TIMESERIES,
             request_type=TimeseriesRequest,
             handler=fetch_timeseries_tool,
-            description="Fetch synthetic timeseries metric points.",
+            description="Fetch SmartRest timeseries metric points.",
+        ),
+        ToolSpec(
+            tool_id=ToolId.FETCH_ITEM_PERFORMANCE,
+            request_type=ItemPerformanceRequest,
+            handler=fetch_item_performance_tool,
+            description="Fetch ranked menu-item performance from SmartRest DB.",
+        ),
+        ToolSpec(
+            tool_id=ToolId.FETCH_CUSTOMER_SUMMARY,
+            request_type=CustomerSummaryRequest,
+            handler=fetch_customer_summary_tool,
+            description="Fetch customer summary metrics from SmartRest DB.",
+        ),
+        ToolSpec(
+            tool_id=ToolId.FETCH_RECEIPT_SUMMARY,
+            request_type=ReceiptSummaryRequest,
+            handler=fetch_receipt_summary_tool,
+            description="Fetch fiscal receipt summary metrics from SmartRest DB.",
         ),
         ToolSpec(
             tool_id=ToolId.ATTACH_BREAKDOWN_SHARE,

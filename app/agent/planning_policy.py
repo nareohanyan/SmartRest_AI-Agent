@@ -26,6 +26,66 @@ class PolicyDecision(SchemaModel):
     allowed: bool
 
 
+def evaluate_business_query_policy(
+    *,
+    date_from: date,
+    date_to: date,
+    scope: ResolveScopeResponse | None,
+    settings: Settings,
+    required_tool: ToolOperation,
+    requested_branch_ids: list[str] | None = None,
+    requested_export_mode: ExportMode | None = None,
+) -> PolicyDecision:
+    if scope is None or scope.status is AccessStatus.DENIED:
+        return PolicyDecision(
+            route=PolicyRoute.REJECT,
+            reason_code="scope_denied",
+            reason_message="Scope is missing or denied.",
+            allowed=False,
+        )
+
+    day_span = (date_to - date_from).days + 1
+    if day_span <= 0:
+        return PolicyDecision(
+            route=PolicyRoute.CLARIFY,
+            reason_code="invalid_date_range",
+            reason_message="Date range is invalid.",
+            allowed=False,
+        )
+    if day_span > settings.planner_max_date_range_days:
+        return PolicyDecision(
+            route=PolicyRoute.CLARIFY,
+            reason_code="date_range_too_wide",
+            reason_message="Date range exceeds configured planning window.",
+            allowed=False,
+        )
+
+    if requested_branch_ids:
+        missing_branch_ids = _missing_branch_permissions(
+            requested_branch_ids=requested_branch_ids,
+            scope=scope,
+        )
+        if missing_branch_ids:
+            return _reject_missing_branch(missing_branch_ids[0])
+
+    if requested_export_mode is not None and not _is_export_mode_allowed(
+        requested_export_mode=requested_export_mode,
+        scope=scope,
+    ):
+        return _reject_export_mode(requested_export_mode)
+
+    missing_tools = _missing_tool_permissions(required_tools=[required_tool], scope=scope)
+    if missing_tools:
+        return _reject_missing_tool(missing_tools[0])
+
+    return PolicyDecision(
+        route=PolicyRoute.RUN_BUSINESS_QUERY,
+        reason_code="ok",
+        reason_message="Plan is allowed for SmartRest business tool execution.",
+        allowed=True,
+    )
+
+
 def _map_retrieval_to_report(
     *,
     mode: RetrievalMode,

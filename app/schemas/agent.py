@@ -47,6 +47,7 @@ class PlannerSource(str, Enum):
 class PolicyRoute(str, Enum):
     PREPARE_LEGACY_REPORT = "prepare_legacy_report"
     RUN_MULTI_REPORT = "run_multi_report"
+    RUN_BUSINESS_QUERY = "run_business_query"
     RUN_COMPARISON = "run_comparison"
     RUN_RANKING = "run_ranking"
     RUN_TREND = "run_trend"

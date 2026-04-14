@@ -11,7 +11,9 @@ class Settings(BaseSettings):
     """Typed application settings loaded from environment."""
 
     app_name: str = "SmartRest AI Agent"
-    app_env: str = "development"
+    app_env: Literal["development", "local_acceptance", "staging", "production"] = (
+        "development"
+    )
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     log_level: str = "INFO"
@@ -59,9 +61,9 @@ class Settings(BaseSettings):
             "TOON_LAHMAJO_DB",
         ),
     )
-    scope_backend_mode: Literal["mock", "db_with_fallback", "db_strict"] = "mock"
-    report_backend_mode: Literal["mock", "db_with_fallback", "db_strict"] = "mock"
-    analytics_backend_mode: Literal["mock", "db_with_fallback", "db_strict"] = "mock"
+    scope_backend_mode: Literal["db_strict"] = "db_strict"
+    report_backend_mode: Literal["db_strict"] = "db_strict"
+    analytics_backend_mode: Literal["db_strict"] = "db_strict"
     sync_batch_size_profiles: int = Field(default=1000, ge=1, le=50_000)
     sync_batch_size_users: int = Field(default=2000, ge=1, le=50_000)
     sync_batch_size_tables: int = Field(default=1000, ge=1, le=50_000)

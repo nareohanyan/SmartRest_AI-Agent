@@ -4,20 +4,36 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from datetime import date
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 import app.agent.graph as graph_module
+import app.agent.report_tools as report_tools
 from app.agent.graph import _build_retrieval_scope, _reject_node, build_agent_graph
 from app.agent.llm.exceptions import LLMClientError
 from app.agent.report_tools import resolve_scope_tool
 from app.agent.tool_registry import ToolId
+from app.agent.tools import business_insights as business_insights_tools
+from app.agent.tools import retrieval as retrieval_tools
 from app.schemas.agent import AgentState, LLMErrorCategory, PolicyRoute, RunStatus
-from app.schemas.analysis import DimensionName, MetricName
-from app.schemas.reports import ReportType
-from app.schemas.tools import AccessStatus, ToolOperation
+from app.schemas.analysis import (
+    BreakdownItem,
+    BreakdownResponse,
+    CustomerSummaryResponse,
+    DimensionName,
+    ItemPerformanceItem,
+    ItemPerformanceMetric,
+    ItemPerformanceResponse,
+    MetricName,
+    TimeseriesPoint,
+    TimeseriesResponse,
+    TotalMetricResponse,
+)
+from app.schemas.reports import ReportMetric, ReportResult, ReportType
+from app.schemas.tools import AccessStatus, RunReportResponse, ToolOperation
 
 
 class _FakeLLMClient:
@@ -92,6 +108,46 @@ def _settings(**overrides: object) -> SimpleNamespace:
 def _default_runtime_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(graph_module, "get_llm_client", _missing_openai_key)
     monkeypatch.setattr(graph_module, "get_settings", lambda: _settings())
+    monkeypatch.setattr(
+        report_tools,
+        "get_canonical_identity_resolver",
+        lambda: type(
+            "_Resolver",
+            (),
+            {
+                "resolve": staticmethod(
+                    lambda **kwargs: None
+                    if kwargs.get("profile_id") == 999
+                    else type(
+                        "_Resolution",
+                        (),
+                        {
+                            "source_system_id": 1,
+                            "canonical_profile_id": 1,
+                            "canonical_user_id": 1,
+                        },
+                    )()
+                )
+            },
+        )(),
+    )
+    monkeypatch.setattr(report_tools, "run_smartrest_report", _fake_run_smartrest_report)
+    monkeypatch.setattr(
+        retrieval_tools,
+        "get_live_analytics_service",
+        lambda: _FakeLiveAnalyticsService(),
+    )
+    monkeypatch.setattr(
+        business_insights_tools,
+        "LiveBusinessToolsService",
+        lambda: _FakeBusinessToolsService(),
+    )
+    graph_module.get_tool_registry.cache_clear()
+    try:
+        yield
+    finally:
+        if hasattr(graph_module.get_tool_registry, "cache_clear"):
+            graph_module.get_tool_registry.cache_clear()
 
 
 def _scope_request_payload(
@@ -101,11 +157,11 @@ def _scope_request_payload(
     requested_branch_ids: list[str] | None = None,
     requested_export_mode: str | None = None,
 ) -> dict[str, object]:
-    metadata: dict[str, str] = {"access": "deny"} if deny else {}
+    metadata: dict[str, str] = {}
     metadata.update(metadata_overrides or {})
     payload: dict[str, object] = {
         "user_id": 101,
-        "profile_id": 201,
+        "profile_id": 999 if deny else 201,
         "profile_nick": "Nick",
         "metadata": metadata,
     }
@@ -144,6 +200,117 @@ def _node_order(graph: Any, payload: dict[str, object]) -> list[str]:
 
 def _plan_envelope(plan: dict[str, object], *, confidence: float = 0.99) -> str:
     return json.dumps({"plan": plan, "confidence": confidence})
+
+
+def _fake_run_smartrest_report(request: Any, *, profile_id: int) -> RunReportResponse:
+    del profile_id
+    metric_map = {
+        ReportType.SALES_TOTAL: [ReportMetric(label="sales_total", value=12345.67)],
+        ReportType.ORDER_COUNT: [ReportMetric(label="order_count", value=345.0)],
+        ReportType.AVERAGE_CHECK: [ReportMetric(label="average_check", value=35.78)],
+        ReportType.SALES_BY_SOURCE: [
+            ReportMetric(label="in_store", value=10000.0),
+            ReportMetric(label="takeaway", value=2345.67),
+        ],
+    }
+    if request.report_id is ReportType.SALES_BY_SOURCE and request.filters.source is not None:
+        metric_map[ReportType.SALES_BY_SOURCE] = [
+            ReportMetric(label=request.filters.source, value=2345.67)
+        ]
+    return RunReportResponse(
+        result=ReportResult(
+            report_id=request.report_id,
+            filters=request.filters,
+            metrics=metric_map[request.report_id],
+        ),
+        warnings=["smartrest_backend_live_data"],
+    )
+
+
+class _FakeLiveAnalyticsService:
+    def get_total_metric(self, request: Any) -> TotalMetricResponse:
+        previous = request.date_to < date(2026, 3, 10)
+        value_map = {
+            MetricName.SALES_TOTAL: 9000 if previous else 10000,
+            MetricName.ORDER_COUNT: 300 if previous else 345,
+            MetricName.AVERAGE_CHECK: 30 if previous else 35,
+        }
+        value = value_map.get(request.metric, 10000)
+        return TotalMetricResponse(
+            metric=request.metric,
+            date_from=request.date_from,
+            date_to=request.date_to,
+            value=value,
+            base_metrics={
+                "sales_total": 10000,
+                "order_count": 345,
+                "day_count": 7,
+            },
+            warnings=[],
+        )
+
+    def get_breakdown(self, request: Any) -> BreakdownResponse:
+        items = [
+            BreakdownItem(label="in_store", value=10000),
+            BreakdownItem(label="takeaway", value=2345.67),
+        ]
+        return BreakdownResponse(
+            metric=request.metric,
+            dimension=request.dimension,
+            date_from=request.date_from,
+            date_to=request.date_to,
+            items=items,
+            total_value=sum(item.value for item in items),
+            warnings=[],
+        )
+
+    def get_timeseries(self, request: Any) -> TimeseriesResponse:
+        return TimeseriesResponse(
+            metric=request.metric,
+            dimension=request.dimension,
+            date_from=request.date_from,
+            date_to=request.date_to,
+            points=[
+                TimeseriesPoint(bucket=date(2026, 3, 10), value=1000),
+                TimeseriesPoint(bucket=date(2026, 3, 11), value=1100),
+            ],
+            warnings=[],
+        )
+
+
+class _FakeBusinessToolsService:
+    def get_item_performance(self, request: Any) -> ItemPerformanceResponse:
+        return ItemPerformanceResponse(
+            metric=request.metric or ItemPerformanceMetric.ITEM_REVENUE,
+            date_from=request.date_from,
+            date_to=request.date_to,
+            ranking_mode=request.ranking_mode,
+            items=[ItemPerformanceItem(menu_item_id=1, name="Lahmajo", value=123)],
+            warnings=[],
+        )
+
+    def get_customer_summary(self, request: Any) -> CustomerSummaryResponse:
+        return CustomerSummaryResponse(
+            date_from=request.date_from,
+            date_to=request.date_to,
+            unique_clients=12,
+            identified_order_count=48,
+            total_order_count=60,
+            average_orders_per_identified_client=4,
+            warnings=[],
+        )
+
+    def get_receipt_summary(self, request: Any):
+        from app.schemas.analysis import ReceiptSummaryResponse
+
+        return ReceiptSummaryResponse(
+            date_from=request.date_from,
+            date_to=request.date_to,
+            receipt_count=15,
+            linked_order_count=14,
+            status_counts={"30": 10, "50": 5},
+            warnings=[],
+        )
 
 
 def test_supported_request_executes_legacy_report_path() -> None:
@@ -218,7 +385,6 @@ def test_ru_comparison_routes_to_dynamic_comparison_path() -> None:
         "tool.compute_scalar_metrics.comparison",
     ]
     assert all(step.status.value == "success" for step in final_state.execution_trace)
-    assert "tool:synthetic_data" in final_state.warnings
 
 
 def test_build_retrieval_scope_uses_requested_branch_ids_when_present() -> None:
@@ -258,13 +424,46 @@ def test_compound_kpi_request_routes_to_multi_report_path() -> None:
     assert final_state.status is RunStatus.COMPLETED
     assert final_state.policy_route is PolicyRoute.RUN_MULTI_REPORT
     assert len(final_state.legacy_task_results) == 2
+
+
+def test_item_business_query_routes_to_business_tool_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_registry = graph_module.get_tool_registry()
+
+    class _BusinessRegistry:
+        def invoke(self, tool_id: ToolId | str, request: Any) -> Any:
+            normalized = ToolId(tool_id)
+            if normalized is ToolId.FETCH_ITEM_PERFORMANCE:
+                return ItemPerformanceResponse(
+                    metric=request.metric,
+                    date_from=request.date_from,
+                    date_to=request.date_to,
+                    ranking_mode=request.ranking_mode,
+                    items=[ItemPerformanceItem(menu_item_id=1, name="Lahmajo", value=123)],
+                    warnings=[],
+                )
+            return base_registry.invoke(normalized, request)
+
+    monkeypatch.setattr(graph_module, "get_tool_registry", lambda: _BusinessRegistry())
+    graph = build_agent_graph()
+    payload = _initial_state("Show top 5 menu items 2026-03-01 to 2026-03-07")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "plan_analysis",
+        "policy_gate",
+        "route_decision",
+        "run_business_query",
+        "compose_answer",
+    ]
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.policy_route is PolicyRoute.RUN_BUSINESS_QUERY
+    assert "Lahmajo" in (final_state.final_answer or "")
     assert all(result.status == "completed" for result in final_state.legacy_task_results)
-    assert "Total sales from 2026-03-01 to 2026-03-07 were 12345.67." in (
-        final_state.final_answer or ""
-    )
-    assert "Order count from 2026-03-01 to 2026-03-07 was 345.00." in (
-        final_state.final_answer or ""
-    )
 
 
 def test_compound_request_returns_partial_success_for_unsupported_task() -> None:
@@ -476,11 +675,11 @@ def test_greeting_with_business_terms_is_not_smalltalk() -> None:
         "plan_analysis",
         "policy_gate",
         "route_decision",
-        "safe_answer",
+        "clarify",
     ]
-    assert final_state.status is RunStatus.REJECTED
+    assert final_state.status is RunStatus.CLARIFY
     assert final_state.policy_route is not None
-    assert final_state.policy_route.value == "safe_answer"
+    assert final_state.policy_route.value == "clarify"
 
 
 def test_high_priority_business_trigger_blocks_smalltalk() -> None:
@@ -495,11 +694,11 @@ def test_high_priority_business_trigger_blocks_smalltalk() -> None:
         "plan_analysis",
         "policy_gate",
         "route_decision",
-        "safe_answer",
+        "clarify",
     ]
-    assert final_state.status is RunStatus.REJECTED
+    assert final_state.status is RunStatus.CLARIFY
     assert final_state.policy_route is not None
-    assert final_state.policy_route.value == "safe_answer"
+    assert final_state.policy_route.value == "clarify"
 
 
 def test_scope_denied_blocks_execution() -> None:

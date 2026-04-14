@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import time
 from collections.abc import AsyncIterator, Iterator
+from datetime import date
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -9,12 +11,29 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 import app.agent.graph as graph_module
+import app.agent.report_tools as report_tools
+from app.agent.tools import business_insights as business_insights_tools
+from app.agent.tools import retrieval as retrieval_tools
 from app.api.app import create_app
 from app.api.routes.agent import _get_runtime_service, _get_subscription_service
 from app.api.schemas import AgentRunRequest
 from app.core.auth import build_canonical_payload, sign_payload_token
 from app.core.config import get_settings
+from app.schemas.analysis import (
+    BreakdownItem,
+    BreakdownResponse,
+    CustomerSummaryResponse,
+    ItemPerformanceItem,
+    ItemPerformanceMetric,
+    ItemPerformanceResponse,
+    MetricName,
+    TimeseriesPoint,
+    TimeseriesResponse,
+    TotalMetricResponse,
+)
+from app.schemas.reports import ReportMetric, ReportResult, ReportType
 from app.schemas.subscription import SubscriptionAccessDecision
+from app.schemas.tools import RunReportResponse
 from app.services.agent_runtime import AgentRuntimeExecutionError
 
 pytestmark = pytest.mark.anyio
@@ -39,9 +58,45 @@ def _disable_openai_client(monkeypatch: pytest.MonkeyPatch) -> None:
     get_settings.cache_clear()
     monkeypatch.setattr(graph_module, "get_llm_client", _missing_openai_key)
     monkeypatch.setenv("SMARTREST_AUTH_SECRET_KEY", "test-secret")
+    monkeypatch.setattr(
+        report_tools,
+        "get_canonical_identity_resolver",
+        lambda: type(
+            "_Resolver",
+            (),
+            {
+                "resolve": staticmethod(
+                    lambda **kwargs: None
+                    if kwargs.get("profile_id") == 999
+                    else type(
+                        "_Resolution",
+                        (),
+                        {
+                            "source_system_id": 1,
+                            "canonical_profile_id": 1,
+                            "canonical_user_id": 1,
+                        },
+                    )()
+                )
+            },
+        )(),
+    )
+    monkeypatch.setattr(report_tools, "run_smartrest_report", _fake_run_smartrest_report)
+    monkeypatch.setattr(
+        retrieval_tools,
+        "get_live_analytics_service",
+        lambda: _FakeLiveAnalyticsService(),
+    )
+    monkeypatch.setattr(
+        business_insights_tools,
+        "LiveBusinessToolsService",
+        lambda: _FakeBusinessToolsService(),
+    )
+    graph_module.get_tool_registry.cache_clear()
     try:
         yield
     finally:
+        graph_module.get_tool_registry.cache_clear()
         get_settings.cache_clear()
 
 
@@ -99,14 +154,15 @@ def _request_payload(
     question: str,
     *,
     metadata: dict[str, str] | None = None,
+    profile_id: int = 201,
 ) -> dict[str, Any]:
     return {
         "chat_id": "11111111-1111-1111-1111-111111111111",
         "user_question": question,
-        "auth": _auth_payload(),
+        "auth": _auth_payload(profile_id=profile_id),
         "scope_request": {
             "user_id": 101,
-            "profile_id": 201,
+            "profile_id": profile_id,
             "profile_nick": "nick",
             "metadata": metadata or {},
         },
@@ -128,7 +184,6 @@ async def test_supported_request_returns_completed_contract(api_client: AsyncCli
     assert payload["selected_report_id"] == "sales_total"
     assert payload["applied_filters"]["date_from"] == "2026-03-01"
     assert payload["applied_filters"]["date_to"] == "2026-03-07"
-    assert "mock_backend_deterministic_data" in payload["warnings"]
     assert payload["needs_clarification"] is False
     assert payload["clarification_question"] is None
 
@@ -225,7 +280,7 @@ async def test_denied_scope_returns_denied_and_blocks_report_path(
         "/agent/run",
         json=_request_payload(
             "What were total sales 2026-03-01 to 2026-03-07?",
-            metadata={"access": "deny"},
+            profile_id=999,
         ),
     )
 
@@ -234,6 +289,112 @@ async def test_denied_scope_returns_denied_and_blocks_report_path(
     assert payload["status"] == "denied"
     assert payload["selected_report_id"] is None
     assert payload["answer"] is not None
+
+
+def _fake_run_smartrest_report(request: Any, *, profile_id: int) -> RunReportResponse:
+    del profile_id
+    metric_map = {
+        ReportType.SALES_TOTAL: [ReportMetric(label="sales_total", value=12345.67)],
+        ReportType.ORDER_COUNT: [ReportMetric(label="order_count", value=345.0)],
+        ReportType.AVERAGE_CHECK: [ReportMetric(label="average_check", value=35.78)],
+        ReportType.SALES_BY_SOURCE: [
+            ReportMetric(label="in_store", value=10000.0),
+            ReportMetric(label="takeaway", value=2345.67),
+        ],
+    }
+    return RunReportResponse(
+        result=ReportResult(
+            report_id=request.report_id,
+            filters=request.filters,
+            metrics=metric_map[request.report_id],
+        ),
+        warnings=["smartrest_backend_live_data"],
+    )
+
+
+class _FakeLiveAnalyticsService:
+    def get_total_metric(self, request: Any) -> TotalMetricResponse:
+        previous = request.date_to < date(2026, 3, 10)
+        value_map = {
+            MetricName.SALES_TOTAL: Decimal("9000") if previous else Decimal("10000"),
+            MetricName.ORDER_COUNT: Decimal("300") if previous else Decimal("345"),
+            MetricName.AVERAGE_CHECK: Decimal("30") if previous else Decimal("35"),
+        }
+        return TotalMetricResponse(
+            metric=request.metric,
+            date_from=request.date_from,
+            date_to=request.date_to,
+            value=value_map.get(request.metric, Decimal("10000")),
+            base_metrics={
+                "sales_total": Decimal("10000"),
+                "order_count": Decimal("345"),
+                "day_count": Decimal("7"),
+            },
+            warnings=[],
+        )
+
+    def get_breakdown(self, request: Any) -> BreakdownResponse:
+        items = [
+            BreakdownItem(label="in_store", value=Decimal("10000")),
+            BreakdownItem(label="takeaway", value=Decimal("2345.67")),
+        ]
+        return BreakdownResponse(
+            metric=request.metric,
+            dimension=request.dimension,
+            date_from=request.date_from,
+            date_to=request.date_to,
+            items=items,
+            total_value=Decimal("12345.67"),
+            warnings=[],
+        )
+
+    def get_timeseries(self, request: Any) -> TimeseriesResponse:
+        return TimeseriesResponse(
+            metric=request.metric,
+            dimension=request.dimension,
+            date_from=request.date_from,
+            date_to=request.date_to,
+            points=[
+                TimeseriesPoint(bucket=date(2026, 3, 10), value=Decimal("1000")),
+                TimeseriesPoint(bucket=date(2026, 3, 11), value=Decimal("1100")),
+            ],
+            warnings=[],
+        )
+
+
+class _FakeBusinessToolsService:
+    def get_item_performance(self, request: Any) -> ItemPerformanceResponse:
+        return ItemPerformanceResponse(
+            metric=request.metric or ItemPerformanceMetric.ITEM_REVENUE,
+            date_from=request.date_from,
+            date_to=request.date_to,
+            ranking_mode=request.ranking_mode,
+            items=[ItemPerformanceItem(menu_item_id=1, name="Lahmajo", value=Decimal("123"))],
+            warnings=[],
+        )
+
+    def get_customer_summary(self, request: Any) -> CustomerSummaryResponse:
+        return CustomerSummaryResponse(
+            date_from=request.date_from,
+            date_to=request.date_to,
+            unique_clients=12,
+            identified_order_count=48,
+            total_order_count=60,
+            average_orders_per_identified_client=Decimal("4"),
+            warnings=[],
+        )
+
+    def get_receipt_summary(self, request: Any):
+        from app.schemas.analysis import ReceiptSummaryResponse
+
+        return ReceiptSummaryResponse(
+            date_from=request.date_from,
+            date_to=request.date_to,
+            receipt_count=15,
+            linked_order_count=14,
+            status_counts={"30": 10, "50": 5},
+            warnings=[],
+        )
 
 
 async def test_invalid_auth_token_returns_401(api_client: AsyncClient) -> None:

@@ -25,7 +25,7 @@ from app.agent.planning import (
 from app.agent.planning import (
     plan_legacy_tasks,
 )
-from app.agent.planning_policy import evaluate_plan_policy
+from app.agent.planning_policy import evaluate_business_query_policy, evaluate_plan_policy
 from app.agent.tool_registry import ToolId, get_tool_registry
 from app.agent.tools.analytics import materialize_previous_period_metrics
 from app.core.config import get_settings
@@ -41,11 +41,15 @@ from app.schemas.agent import (
 from app.schemas.analysis import (
     AnalysisIntent,
     BreakdownRequest,
+    BusinessQueryKind,
+    CustomerSummaryRequest,
     DimensionName,
+    ItemPerformanceRequest,
     LegacyReportTask,
     LegacyReportTaskResult,
     MovingAverageRequest,
     RankItemsRequest,
+    ReceiptSummaryRequest,
     RetrievalScope,
     TimeseriesRequest,
     ToolWarningCode,
@@ -54,7 +58,7 @@ from app.schemas.analysis import (
 )
 from app.schemas.calculations import ComputeMetricsRequest
 from app.schemas.reports import ReportFilters, ReportRequest, ReportType
-from app.schemas.tools import AccessStatus, RunReportRequest
+from app.schemas.tools import AccessStatus, RunReportRequest, ToolOperation
 
 _ARMENIAN_CHAR_RE = re.compile(r"[\u0531-\u058F]")
 _CYRILLIC_CHAR_RE = re.compile(r"[\u0400-\u04FF]")
@@ -318,7 +322,7 @@ def _plan_analysis_node(state: AgentState) -> dict[str, Any]:
         }
 
     preplanned = deterministic_plan_analysis(state.user_question)
-    if preplanned.intent is AnalysisIntent.SMALLTALK:
+    if preplanned.intent is AnalysisIntent.SMALLTALK or preplanned.business_query is not None:
         return {
             "analysis_plan": preplanned,
             "legacy_tasks": [],
@@ -433,6 +437,38 @@ def _policy_gate_node(state: AgentState) -> dict[str, Any]:
             "policy_route": PolicyRoute.REJECT,
             "policy_reason": "Plan is missing.",
             "warnings": [*state.warnings, "policy:missing_plan"],
+        }
+
+    if plan.business_query is not None:
+        required_tool = {
+            BusinessQueryKind.ITEM_PERFORMANCE: ToolOperation.FETCH_ITEM_PERFORMANCE,
+            BusinessQueryKind.CUSTOMER_SUMMARY: ToolOperation.FETCH_CUSTOMER_SUMMARY,
+            BusinessQueryKind.RECEIPT_SUMMARY: ToolOperation.FETCH_RECEIPT_SUMMARY,
+        }[plan.business_query.kind]
+        decision = evaluate_business_query_policy(
+            date_from=plan.business_query.date_from,
+            date_to=plan.business_query.date_to,
+            scope=state.user_scope,
+            settings=get_settings(),
+            required_tool=required_tool,
+            requested_branch_ids=(
+                state.scope_request.requested_branch_ids
+                if state.scope_request is not None
+                else None
+            ),
+            requested_export_mode=(
+                state.scope_request.requested_export_mode
+                if state.scope_request is not None
+                else None
+            ),
+        )
+        warnings = state.warnings
+        if decision.reason_code != "ok":
+            warnings = [*warnings, f"policy:{decision.reason_code}"]
+        return {
+            "policy_route": decision.route,
+            "policy_reason": decision.reason_message,
+            "warnings": warnings,
         }
 
     retrieval = plan.retrieval
@@ -1068,6 +1104,129 @@ def _run_trend_node(state: AgentState) -> dict[str, Any]:
     }
 
 
+def _run_business_query_node(state: AgentState) -> dict[str, Any]:
+    plan = state.analysis_plan
+    if plan is None or plan.business_query is None:
+        return {
+            "status": RunStatus.FAILED,
+            "final_answer": "Business query failed: missing business query context.",
+            "warnings": [*state.warnings, "business_query_missing_context"],
+        }
+
+    tool_registry = get_tool_registry()
+    execution_trace = state.execution_trace
+    retrieval_scope = _build_retrieval_scope(state)
+    business_query = plan.business_query
+
+    if business_query.kind is BusinessQueryKind.ITEM_PERFORMANCE:
+        if business_query.item_metric is None:
+            return {
+                "status": RunStatus.FAILED,
+                "final_answer": "Business query failed: item metric is missing.",
+                "warnings": [*state.warnings, "business_query_item_metric_missing"],
+            }
+        item_request = ItemPerformanceRequest(
+            metric=business_query.item_metric,
+            date_from=business_query.date_from,
+            date_to=business_query.date_to,
+            limit=business_query.limit,
+            ranking_mode=business_query.ranking_mode,
+            item_query=business_query.item_query,
+            scope=retrieval_scope,
+        )
+        started_at = perf_counter()
+        response = tool_registry.invoke(ToolId.FETCH_ITEM_PERFORMANCE, item_request)
+        execution_trace = _append_tool_trace_step(
+            execution_trace,
+            step_id="tool.fetch_item_performance",
+            input_ref="analysis_plan.business_query",
+            output_ref="item_performance_response",
+            started_at=started_at,
+        )
+        summary_items = ", ".join(
+            f"{item.name}={item.value:.2f}" for item in response.items
+        ) or "no items found"
+        summary = (
+            f"Item performance for {business_query.date_from} to {business_query.date_to} "
+            f"({response.metric.value}): {summary_items}."
+        )
+        return {
+            "analysis_artifacts": {
+                **state.analysis_artifacts,
+                "kind": "item_performance",
+                "summary": summary,
+            },
+            "warnings": state.warnings,
+            "execution_trace": execution_trace,
+        }
+
+    if business_query.kind is BusinessQueryKind.CUSTOMER_SUMMARY:
+        customer_request = CustomerSummaryRequest(
+            date_from=business_query.date_from,
+            date_to=business_query.date_to,
+            scope=retrieval_scope,
+        )
+        started_at = perf_counter()
+        response = tool_registry.invoke(ToolId.FETCH_CUSTOMER_SUMMARY, customer_request)
+        execution_trace = _append_tool_trace_step(
+            execution_trace,
+            step_id="tool.fetch_customer_summary",
+            input_ref="analysis_plan.business_query",
+            output_ref="customer_summary_response",
+            started_at=started_at,
+        )
+        summary = (
+            f"Customer summary for {business_query.date_from} to {business_query.date_to}: "
+            f"unique_clients={response.unique_clients}, "
+            f"identified_order_count={response.identified_order_count}, "
+            f"total_order_count={response.total_order_count}, "
+            f"average_orders_per_identified_client="
+            f"{response.average_orders_per_identified_client:.2f}."
+        )
+        return {
+            "analysis_artifacts": {
+                **state.analysis_artifacts,
+                "kind": "customer_summary",
+                "summary": summary,
+            },
+            "warnings": state.warnings,
+            "execution_trace": execution_trace,
+        }
+
+    receipt_request = ReceiptSummaryRequest(
+        date_from=business_query.date_from,
+        date_to=business_query.date_to,
+        scope=retrieval_scope,
+    )
+    started_at = perf_counter()
+    response = tool_registry.invoke(ToolId.FETCH_RECEIPT_SUMMARY, receipt_request)
+    execution_trace = _append_tool_trace_step(
+        execution_trace,
+        step_id="tool.fetch_receipt_summary",
+        input_ref="analysis_plan.business_query",
+        output_ref="receipt_summary_response",
+        started_at=started_at,
+    )
+    status_summary = ", ".join(
+        f"{status}={count}" for status, count in sorted(response.status_counts.items())
+    ) or "no receipt statuses found"
+    summary = (
+        f"Receipt summary for {business_query.date_from} to {business_query.date_to}: "
+        f"receipt_count={response.receipt_count}, "
+        f"linked_order_count={response.linked_order_count}, "
+        f"statuses: {status_summary}."
+    )
+    return {
+        "analysis_artifacts": {
+            **state.analysis_artifacts,
+            "kind": "receipt_summary",
+            "summary": summary,
+        },
+        "warnings": state.warnings,
+        "execution_trace": execution_trace,
+    }
+
+
 def _clarify_node(state: AgentState) -> dict[str, Any]:
     language = _question_language(state.user_question)
     fallback_question = state.clarification_question or (
@@ -1225,6 +1384,7 @@ def build_agent_graph() -> Any:
     graph.add_node("prepare_legacy_report", _prepare_legacy_report_node)
     graph.add_node("run_report", _run_report_node)
     graph.add_node("run_multi_report", _run_multi_report_node)
+    graph.add_node("run_business_query", _run_business_query_node)
     graph.add_node("calc_metrics", _calc_metrics_node)
     graph.add_node("run_comparison", _run_comparison_node)
     graph.add_node("run_ranking", _run_ranking_node)
@@ -1245,6 +1405,7 @@ def build_agent_graph() -> Any:
         {
             PolicyRoute.PREPARE_LEGACY_REPORT.value: "prepare_legacy_report",
             PolicyRoute.RUN_MULTI_REPORT.value: "run_multi_report",
+            PolicyRoute.RUN_BUSINESS_QUERY.value: "run_business_query",
             PolicyRoute.RUN_COMPARISON.value: "run_comparison",
             PolicyRoute.RUN_RANKING.value: "run_ranking",
             PolicyRoute.RUN_TREND.value: "run_trend",
@@ -1257,6 +1418,7 @@ def build_agent_graph() -> Any:
     graph.add_edge("prepare_legacy_report", "run_report")
     graph.add_edge("run_report", "calc_metrics")
     graph.add_edge("run_multi_report", "compose_answer")
+    graph.add_edge("run_business_query", "compose_answer")
     graph.add_edge("calc_metrics", "compose_answer")
     graph.add_edge("run_comparison", "compose_answer")
     graph.add_edge("run_ranking", "compose_answer")

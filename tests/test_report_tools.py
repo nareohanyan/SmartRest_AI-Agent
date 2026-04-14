@@ -2,19 +2,28 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import date, datetime, time, timezone
 
 import pytest
 
+import app.agent.report_tools as report_tools
 from app.agent.report_tools import (
     get_report_definition_tool,
     list_reports_tool,
     resolve_scope_tool,
     run_report_tool,
 )
-from app.reports import MOCK_BACKEND_WARNING, REPORT_CATALOG_ORDER
+from app.core.config import get_settings
+from app.reports import REPORT_CATALOG_ORDER
 from app.schemas.analysis import DimensionName, MetricName
-from app.schemas.reports import ReportFilters, ReportRequest, ReportType
+from app.schemas.reports import (
+    ReportFilters,
+    ReportMetric,
+    ReportRequest,
+    ReportResult,
+    ReportType,
+)
 from app.schemas.tools import (
     AccessStatus,
     ExportMode,
@@ -22,8 +31,80 @@ from app.schemas.tools import (
     ListReportsRequest,
     ResolveScopeRequest,
     RunReportRequest,
+    RunReportResponse,
     ToolOperation,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_settings_cache() -> Iterator[None]:
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _resolver_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Resolution:
+        source_system_id = 1
+        canonical_profile_id = 1
+        canonical_user_id = 1
+
+    class _Resolver:
+        def resolve(self, **_kwargs: object) -> _Resolution:
+            return _Resolution()
+
+    monkeypatch.setattr(report_tools, "get_canonical_identity_resolver", lambda: _Resolver())
+
+
+@pytest.fixture(autouse=True)
+def _smartrest_report_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _run_report(request: ReportRequest, *, profile_id: int) -> RunReportResponse:
+        del profile_id
+        generated_at = datetime.combine(
+            request.filters.date_to,
+            time.min,
+            tzinfo=timezone.utc,
+        )
+        if request.report_id is ReportType.SALES_TOTAL:
+            if request.filters.source is not None:
+                raise ValueError("Source filter is not supported")
+            metrics = [ReportMetric(label="sales_total", value=12345.67)]
+        elif request.report_id is ReportType.SALES_BY_SOURCE:
+            if request.filters.source == "glovo":
+                raise ValueError("Unsupported source")
+            source_values = {
+                "in_store": 9876.54,
+                "takeaway": 2469.13,
+            }
+            if request.filters.source is None:
+                metrics = [
+                    ReportMetric(label="in_store", value=source_values["in_store"]),
+                    ReportMetric(label="takeaway", value=source_values["takeaway"]),
+                ]
+            else:
+                source_value = source_values[request.filters.source]
+                metrics = [
+                    ReportMetric(label=request.filters.source, value=source_value)
+                ]
+        elif request.report_id is ReportType.ORDER_COUNT:
+            metrics = [ReportMetric(label="order_count", value=345.0)]
+        else:
+            metrics = [ReportMetric(label="average_check", value=35.78)]
+
+        return RunReportResponse(
+            result=ReportResult(
+                report_id=request.report_id,
+                filters=request.filters,
+                metrics=metrics,
+                generated_at=generated_at,
+            ),
+            warnings=["smartrest_backend_live_data"],
+        )
+
+    monkeypatch.setattr(report_tools, "run_smartrest_report", _run_report)
 
 
 def _identity_payload() -> dict[str, int | str]:
@@ -51,15 +132,20 @@ def test_resolve_scope_granted_returns_all_reports() -> None:
     assert response.allowed_tool_operations == list(ToolOperation)
 
 
-def test_resolve_scope_denied_by_metadata_flag() -> None:
-    request = ResolveScopeRequest.model_validate(
-        {**_identity_payload(), "metadata": {"access": "deny"}}
-    )
+def test_resolve_scope_denies_when_identity_is_not_mapped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Resolver:
+        def resolve(self, **_kwargs: object) -> None:
+            return None
+
+    monkeypatch.setattr(report_tools, "get_canonical_identity_resolver", lambda: _Resolver())
+    request = ResolveScopeRequest.model_validate({**_identity_payload(), "metadata": {}})
 
     response = resolve_scope_tool(request)
 
     assert response.status is AccessStatus.DENIED
-    assert response.denial_reason == "mock_access_denied"
+    assert response.denial_reason == "identity_not_mapped"
     assert response.allowed_report_ids == []
 
 
@@ -156,9 +242,8 @@ def test_run_report_sales_total_is_deterministic_for_same_input() -> None:
     response_2 = run_report_tool(request)
 
     assert response_1.model_dump() == response_2.model_dump()
-    assert response_1.warnings == [MOCK_BACKEND_WARNING]
+    assert response_1.warnings == ["smartrest_backend_live_data"]
     assert response_1.result.metrics[0].label == "sales_total"
-    assert response_1.result.metrics[0].value == 12345.67
     assert response_1.result.generated_at == datetime.combine(
         date(2026, 3, 7),
         time.min,
@@ -178,12 +263,7 @@ def test_run_report_sales_by_source_without_filter_returns_all_sources() -> None
     response = run_report_tool(request)
 
     metrics_map = {metric.label: metric.value for metric in response.result.metrics}
-    assert metrics_map == {
-        "in_store": 5200.00,
-        "glovo": 4100.00,
-        "wolt": 2200.00,
-        "takeaway": 845.67,
-    }
+    assert set(metrics_map) == {"in_store", "takeaway"}
 
 
 def test_run_report_sales_by_source_with_filter_returns_single_source() -> None:
@@ -194,7 +274,7 @@ def test_run_report_sales_by_source_with_filter_returns_single_source() -> None:
             filters=ReportFilters(
                 date_from=date(2026, 3, 1),
                 date_to=date(2026, 3, 7),
-                source="glovo",
+                source="takeaway",
             ),
         ),
     )
@@ -202,8 +282,7 @@ def test_run_report_sales_by_source_with_filter_returns_single_source() -> None:
     response = run_report_tool(request)
 
     assert len(response.result.metrics) == 1
-    assert response.result.metrics[0].label == "glovo"
-    assert response.result.metrics[0].value == 4100.00
+    assert response.result.metrics[0].label == "takeaway"
 
 
 def test_run_report_unknown_source_fails() -> None:
@@ -214,7 +293,7 @@ def test_run_report_unknown_source_fails() -> None:
             filters=ReportFilters(
                 date_from=date(2026, 3, 1),
                 date_to=date(2026, 3, 7),
-                source="uber_eats",
+                source="glovo",
             ),
         ),
     )

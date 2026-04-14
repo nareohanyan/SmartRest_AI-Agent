@@ -8,7 +8,10 @@ from app.agent.planner_lexicon import get_planner_lexicon
 from app.schemas.analysis import (
     AnalysisIntent,
     AnalysisPlan,
+    BusinessQueryKind,
+    BusinessQuerySpec,
     DimensionName,
+    ItemPerformanceMetric,
     LegacyReportTask,
     MetricName,
     RankingMode,
@@ -32,6 +35,10 @@ _SMALLTALK_TOKEN_NORMALIZE_RE = re.compile(r"[^\w\s'’]+")
 _TEXT_TOKEN_NORMALIZE_RE = re.compile(r"[^\w\s'’-]+")
 _MULTI_TASK_SPLIT_RE = re.compile(r"\s+(?:and|և|и)\s+", re.IGNORECASE)
 _PLANNER_LEXICON = get_planner_lexicon()
+_ITEM_QUERY_RE = re.compile(
+    r"(?:item|dish|menu item|product|ապրանք|ուտեստ|блюдо|товар)\s+"
+    r"([a-zA-Z0-9\u0400-\u04FF\u0531-\u058F'’ -]{2,})"
+)
 
 
 class PlanningError(ValueError):
@@ -360,6 +367,162 @@ def _needs_comparison(question: str) -> bool:
     return _has_any_phrase(normalized, _PLANNER_LEXICON.comparison_terms)
 
 
+def _is_item_business_query(question: str) -> bool:
+    normalized = _normalize_text(question)
+    item_terms = {
+        "item",
+        "items",
+        "dish",
+        "dishes",
+        "menu",
+        "menu item",
+        "product",
+        "products",
+        "ուտեստ",
+        "մենյու",
+        "ապրանք",
+        "блюдо",
+        "блюда",
+        "меню",
+        "товар",
+        "товары",
+    }
+    performance_terms = {
+        "top",
+        "bottom",
+        "best",
+        "worst",
+        "sold",
+        "sales",
+        "revenue",
+        "quantity",
+        "qty",
+        "performance",
+        "popular",
+        "լավագույն",
+        "վատագույն",
+        "վաճառք",
+        "քանակ",
+        "популяр",
+        "продаж",
+        "выруч",
+        "колич",
+    }
+    return any(term in normalized for term in item_terms) and any(
+        term in normalized for term in performance_terms
+    )
+
+
+def _is_customer_business_query(question: str) -> bool:
+    normalized = _normalize_text(question)
+    customer_terms = {
+        "customer",
+        "customers",
+        "client",
+        "clients",
+        "guest",
+        "guests",
+        "հաճախորդ",
+        "հաճախորդներ",
+        "клиент",
+        "клиенты",
+        "гость",
+        "гости",
+    }
+    return any(term in normalized for term in customer_terms)
+
+
+def _is_receipt_business_query(question: str) -> bool:
+    normalized = _normalize_text(question)
+    receipt_terms = {
+        "receipt",
+        "receipts",
+        "fiscal",
+        "check",
+        "checks",
+        "receipt status",
+        "կտրոն",
+        "ֆիսկալ",
+        "чек",
+        "чеки",
+        "фискаль",
+    }
+    return any(term in normalized for term in receipt_terms)
+
+
+def _detect_item_metric(question: str) -> ItemPerformanceMetric:
+    normalized = _normalize_text(question)
+    if any(term in normalized for term in {"quantity", "qty", "sold", "քանակ", "колич"}):
+        return ItemPerformanceMetric.QUANTITY_SOLD
+    if any(term in normalized for term in {"distinct orders", "order presence", "заказ", "պատվեր"}):
+        return ItemPerformanceMetric.DISTINCT_ORDERS
+    return ItemPerformanceMetric.ITEM_REVENUE
+
+
+def _extract_item_query(question: str) -> str | None:
+    quote_match = re.search(r"[\"“](.+?)[\"”]", question)
+    if quote_match:
+        extracted = quote_match.group(1).strip()
+        return extracted or None
+
+    match = _ITEM_QUERY_RE.search(question)
+    if not match:
+        return None
+    extracted = match.group(1).strip(" .,!?:;")
+    if len(extracted) < 2:
+        return None
+    return extracted
+
+
+def _build_business_plan(question: str, date_from: date, date_to: date) -> AnalysisPlan | None:
+    ranking_mode = _needs_ranking(question) or RankingMode.TOP_K
+    ranking_k = _extract_ranking_k(question)
+
+    if _is_item_business_query(question):
+        return AnalysisPlan(
+            intent=AnalysisIntent.RANKING,
+            business_query=BusinessQuerySpec(
+                kind=BusinessQueryKind.ITEM_PERFORMANCE,
+                date_from=date_from,
+                date_to=date_to,
+                item_metric=_detect_item_metric(question),
+                item_query=_extract_item_query(question),
+                limit=ranking_k,
+                ranking_mode=ranking_mode,
+            ),
+            ranking=RankingSpec(
+                mode=ranking_mode,
+                k=ranking_k,
+                metric_key=_detect_item_metric(question).value,
+            ),
+            reasoning_notes="Item performance request routed to SmartRest item analytics tool.",
+        )
+
+    if _is_customer_business_query(question):
+        return AnalysisPlan(
+            intent=AnalysisIntent.METRIC_TOTAL,
+            business_query=BusinessQuerySpec(
+                kind=BusinessQueryKind.CUSTOMER_SUMMARY,
+                date_from=date_from,
+                date_to=date_to,
+            ),
+            reasoning_notes="Customer request routed to SmartRest customer summary tool.",
+        )
+
+    if _is_receipt_business_query(question):
+        return AnalysisPlan(
+            intent=AnalysisIntent.METRIC_TOTAL,
+            business_query=BusinessQuerySpec(
+                kind=BusinessQueryKind.RECEIPT_SUMMARY,
+                date_from=date_from,
+                date_to=date_to,
+            ),
+            reasoning_notes="Receipt request routed to SmartRest receipt summary tool.",
+        )
+
+    return None
+
+
 def _build_previous_period(date_from: date, date_to: date) -> tuple[date, date]:
     duration = (date_to - date_from).days + 1
     previous_end = date_from - timedelta(days=1)
@@ -375,16 +538,15 @@ def plan_analysis(question: str) -> AnalysisPlan:
             reasoning_notes="Greeting/smalltalk intent routed to conversational safe path.",
         )
 
-    metric = _detect_metric(question)
-    if metric is None:
-        return AnalysisPlan(
-            intent=AnalysisIntent.UNSUPPORTED,
-            needs_clarification=False,
-            reasoning_notes="No supported demo metric keyword found.",
-        )
-
+    normalized = _normalize_text(question)
     date_range = _parse_date_range(question)
     if date_range is None:
+        if not _contains_business_signal(normalized):
+            return AnalysisPlan(
+                intent=AnalysisIntent.UNSUPPORTED,
+                needs_clarification=False,
+                reasoning_notes="No supported SmartRest metric or business tool keyword found.",
+            )
         language = _question_language(question)
         clarification_question = (
             "Խնդրում եմ նշեք ժամանակահատվածը YYYY-MM-DD to YYYY-MM-DD ձևաչափով:"
@@ -403,6 +565,18 @@ def plan_analysis(question: str) -> AnalysisPlan:
         )
 
     date_from, date_to = date_range
+    business_plan = _build_business_plan(question, date_from, date_to)
+    if business_plan is not None:
+        return business_plan
+
+    metric = _detect_metric(question)
+    if metric is None:
+        return AnalysisPlan(
+            intent=AnalysisIntent.UNSUPPORTED,
+            needs_clarification=False,
+            reasoning_notes="No supported SmartRest metric or business tool keyword found.",
+        )
+
     if _needs_breakdown(question):
         ranking_mode = _needs_ranking(question)
         ranking_k = _extract_ranking_k(question)

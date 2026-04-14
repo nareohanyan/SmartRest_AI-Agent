@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
+
+import pytest
 
 from app.agent.planning import plan_analysis
 from app.agent.tools import compute_metrics_tool, fetch_total_metric_tool
+from app.agent.tools import retrieval as retrieval_tools
 from app.agent.tools.math_helpers import quantize_decimal
 from app.schemas.analysis import (
     AnalysisIntent,
+    BusinessQueryKind,
     DimensionName,
+    ItemPerformanceMetric,
     MetricName,
     RetrievalMode,
+    RetrievalScope,
     TotalMetricRequest,
 )
 
@@ -63,6 +70,29 @@ def test_planner_detects_breakdown_dimension_from_registry_aliases() -> None:
     assert plan.retrieval is not None
     assert plan.retrieval.mode is RetrievalMode.BREAKDOWN
     assert plan.retrieval.dimension is DimensionName.BRANCH
+
+
+def test_planner_routes_item_query_to_business_tool_plan() -> None:
+    plan = plan_analysis("Show top 5 menu items 2026-03-01 to 2026-03-07")
+
+    assert plan.business_query is not None
+    assert plan.business_query.kind is BusinessQueryKind.ITEM_PERFORMANCE
+    assert plan.business_query.item_metric is ItemPerformanceMetric.ITEM_REVENUE
+    assert plan.business_query.limit == 5
+
+
+def test_planner_routes_customer_query_to_business_tool_plan() -> None:
+    plan = plan_analysis("Show customers 2026-03-01 to 2026-03-07")
+
+    assert plan.business_query is not None
+    assert plan.business_query.kind is BusinessQueryKind.CUSTOMER_SUMMARY
+
+
+def test_planner_routes_receipt_query_to_business_tool_plan() -> None:
+    plan = plan_analysis("Show receipt summary 2026-03-01 to 2026-03-07")
+
+    assert plan.business_query is not None
+    assert plan.business_query.kind is BusinessQueryKind.RECEIPT_SUMMARY
 
 
 def test_relative_today_is_mapped_to_single_day_range() -> None:
@@ -138,6 +168,7 @@ def test_average_check_total_uses_weighted_period_formula() -> None:
             metric=MetricName.AVERAGE_CHECK,
             date_from=date_from,
             date_to=date_to,
+            scope=RetrievalScope(profile_id=98),
         )
     )
     sales_total = fetch_total_metric_tool(
@@ -145,6 +176,7 @@ def test_average_check_total_uses_weighted_period_formula() -> None:
             metric=MetricName.SALES_TOTAL,
             date_from=date_from,
             date_to=date_to,
+            scope=RetrievalScope(profile_id=98),
         )
     )
     order_count = fetch_total_metric_tool(
@@ -152,8 +184,38 @@ def test_average_check_total_uses_weighted_period_formula() -> None:
             metric=MetricName.ORDER_COUNT,
             date_from=date_from,
             date_to=date_to,
+            scope=RetrievalScope(profile_id=98),
         )
     )
 
     expected_average_check = quantize_decimal(sales_total.value / order_count.value)
     assert average_check.value == expected_average_check
+
+
+@pytest.fixture(autouse=True)
+def _fake_live_analytics(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _LiveService:
+        def get_total_metric(self, request: TotalMetricRequest):
+            values = {
+                MetricName.SALES_TOTAL: Decimal("700"),
+                MetricName.ORDER_COUNT: Decimal("14"),
+                MetricName.AVERAGE_CHECK: Decimal("50"),
+            }
+            return type(
+                "_Response",
+                (),
+                {
+                    "metric": request.metric,
+                    "date_from": request.date_from,
+                    "date_to": request.date_to,
+                    "value": values[request.metric],
+                    "base_metrics": {
+                        "sales_total": Decimal("700"),
+                        "order_count": Decimal("14"),
+                        "day_count": Decimal("7"),
+                    },
+                    "warnings": [],
+                },
+            )()
+
+    monkeypatch.setattr(retrieval_tools, "get_live_analytics_service", lambda: _LiveService())

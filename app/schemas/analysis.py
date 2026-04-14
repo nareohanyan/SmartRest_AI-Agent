@@ -55,10 +55,6 @@ class AnalysisIntent(str, Enum):
 
 
 class ToolWarningCode(str, Enum):
-    SYNTHETIC_DATA = "synthetic_data"
-    SINGLE_DAY_WINDOW = "single_day_window"
-    LARGE_DATE_RANGE_SYNTHETIC = "large_date_range_synthetic"
-    INSUFFICIENT_POINTS = "insufficient_points"
     ZERO_TOTAL_NO_SHARE = "zero_total_no_share"
 
 
@@ -70,6 +66,18 @@ class SortDirection(str, Enum):
 class RankingMode(str, Enum):
     TOP_K = "top_k"
     BOTTOM_K = "bottom_k"
+
+
+class ItemPerformanceMetric(str, Enum):
+    ITEM_REVENUE = "item_revenue"
+    QUANTITY_SOLD = "quantity_sold"
+    DISTINCT_ORDERS = "distinct_orders"
+
+
+class BusinessQueryKind(str, Enum):
+    ITEM_PERFORMANCE = "item_performance"
+    CUSTOMER_SUMMARY = "customer_summary"
+    RECEIPT_SUMMARY = "receipt_summary"
 
 
 class RankingSpec(SchemaModel):
@@ -108,6 +116,7 @@ class RetrievalSpec(SchemaModel):
 class AnalysisPlan(SchemaModel):
     intent: AnalysisIntent
     retrieval: RetrievalSpec | None = None
+    business_query: BusinessQuerySpec | None = None
     compare_to_previous_period: bool = False
     previous_period_retrieval: RetrievalSpec | None = None
     scalar_calculations: list[CalculationSpec] = Field(default_factory=list)
@@ -129,8 +138,9 @@ class AnalysisPlan(SchemaModel):
             self.intent
             not in {AnalysisIntent.CLARIFY, AnalysisIntent.UNSUPPORTED, AnalysisIntent.SMALLTALK}
             and self.retrieval is None
+            and self.business_query is None
         ):
-            raise ValueError("retrieval is required for supported plans")
+            raise ValueError("retrieval or business_query is required for supported plans")
         if self.compare_to_previous_period and self.previous_period_retrieval is None:
             raise ValueError(
                 "previous_period_retrieval is required when compare_to_previous_period=true"
@@ -205,6 +215,100 @@ class TimeseriesResponse(SchemaModel):
     date_to: date
     points: list[TimeseriesPoint] = Field(default_factory=list)
     warnings: list[ToolWarningCode] = Field(default_factory=list)
+
+
+class ItemPerformanceItem(SchemaModel):
+    menu_item_id: int | None = Field(default=None, ge=1)
+    name: str = Field(min_length=1)
+    value: Decimal
+
+
+class ItemPerformanceRequest(SchemaModel):
+    metric: ItemPerformanceMetric
+    date_from: date
+    date_to: date
+    limit: int = Field(default=10, ge=1, le=50)
+    ranking_mode: RankingMode = RankingMode.TOP_K
+    item_query: str | None = Field(default=None, min_length=1)
+    scope: RetrievalScope | None = None
+
+    @model_validator(mode="after")
+    def validate_date_range(self) -> ItemPerformanceRequest:
+        if self.date_from > self.date_to:
+            raise ValueError("date_from must be on or before date_to")
+        return self
+
+
+class BusinessQuerySpec(SchemaModel):
+    kind: BusinessQueryKind
+    date_from: date
+    date_to: date
+    item_metric: ItemPerformanceMetric | None = None
+    item_query: str | None = Field(default=None, min_length=1)
+    limit: int = Field(default=10, ge=1, le=50)
+    ranking_mode: RankingMode = RankingMode.TOP_K
+
+    @model_validator(mode="after")
+    def validate_contract(self) -> BusinessQuerySpec:
+        if self.date_from > self.date_to:
+            raise ValueError("date_from must be on or before date_to")
+        if self.kind is BusinessQueryKind.ITEM_PERFORMANCE and self.item_metric is None:
+            raise ValueError("item_metric is required for item_performance business queries")
+        if self.kind is not BusinessQueryKind.ITEM_PERFORMANCE and self.item_metric is not None:
+            raise ValueError("item_metric is only valid for item_performance business queries")
+        return self
+
+
+class ItemPerformanceResponse(SchemaModel):
+    metric: ItemPerformanceMetric
+    date_from: date
+    date_to: date
+    ranking_mode: RankingMode
+    items: list[ItemPerformanceItem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CustomerSummaryRequest(SchemaModel):
+    date_from: date
+    date_to: date
+    scope: RetrievalScope | None = None
+
+    @model_validator(mode="after")
+    def validate_date_range(self) -> CustomerSummaryRequest:
+        if self.date_from > self.date_to:
+            raise ValueError("date_from must be on or before date_to")
+        return self
+
+
+class CustomerSummaryResponse(SchemaModel):
+    date_from: date
+    date_to: date
+    unique_clients: int = Field(ge=0)
+    identified_order_count: int = Field(ge=0)
+    total_order_count: int = Field(ge=0)
+    average_orders_per_identified_client: Decimal
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ReceiptSummaryRequest(SchemaModel):
+    date_from: date
+    date_to: date
+    scope: RetrievalScope | None = None
+
+    @model_validator(mode="after")
+    def validate_date_range(self) -> ReceiptSummaryRequest:
+        if self.date_from > self.date_to:
+            raise ValueError("date_from must be on or before date_to")
+        return self
+
+
+class ReceiptSummaryResponse(SchemaModel):
+    date_from: date
+    date_to: date
+    receipt_count: int = Field(ge=0)
+    linked_order_count: int = Field(ge=0)
+    status_counts: dict[str, int] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class MovingAveragePoint(SchemaModel):

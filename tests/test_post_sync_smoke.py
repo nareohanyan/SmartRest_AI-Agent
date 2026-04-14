@@ -7,12 +7,27 @@ import pytest
 from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.orm import Session
 
+from app.agent.tools.business_insights import (
+    fetch_customer_summary_tool,
+    fetch_item_performance_tool,
+    fetch_receipt_summary_tool,
+)
+from app.core.config import get_settings
 from app.reports.smartrest_backend import run_smartrest_report
+from app.schemas.analysis import (
+    CustomerSummaryRequest,
+    ItemPerformanceMetric,
+    ItemPerformanceRequest,
+    RankingMode,
+    ReceiptSummaryRequest,
+    RetrievalScope,
+)
 from app.schemas.reports import ReportFilters, ReportRequest, ReportType
 from app.services.canonical_identity import CanonicalIdentityResolver
 from app.smartrest.models import (
     CanonicalProfile,
     CanonicalSourceMap,
+    Order,
     Profile,
     ProfileSourceMap,
     SourceSystem,
@@ -143,3 +158,71 @@ def test_post_sync_live_report_backend_executes_for_one_synced_profile(
 
     assert response.result.report_id is ReportType.SALES_TOTAL
     assert response.result.metrics
+
+
+def test_post_sync_live_sales_by_source_report_executes_for_one_synced_profile(
+    operational_engine,
+) -> None:
+    with Session(bind=operational_engine) as session:
+        row = session.execute(
+            select(Order.profile_id, Order.order_create_date)
+            .where(Order.order_create_date.is_not(None))
+            .order_by(Order.order_create_date.desc())
+            .limit(1)
+        ).one()
+
+    date_to = row.order_create_date.date()
+    date_from = date_to - timedelta(days=29)
+    response = run_smartrest_report(
+        ReportRequest(
+            report_id=ReportType.SALES_BY_SOURCE,
+            filters=ReportFilters(date_from=date_from, date_to=date_to),
+        ),
+        profile_id=int(row.profile_id),
+    )
+
+    metrics = {metric.label: metric.value for metric in response.result.metrics}
+    assert set(metrics) == {"in_store", "takeaway"}
+    assert sum(metrics.values()) >= 0
+
+
+def test_post_sync_live_business_tools_execute_for_one_synced_profile(
+    operational_engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with Session(bind=operational_engine) as session:
+        row = session.execute(
+            select(Order.profile_id, Order.order_create_date)
+            .where(Order.order_create_date.is_not(None))
+            .order_by(Order.order_create_date.desc())
+            .limit(1)
+        ).one()
+
+    date_to = row.order_create_date.date()
+    date_from = date_to - timedelta(days=29)
+    scope = RetrievalScope(profile_id=int(row.profile_id))
+
+    monkeypatch.setenv("SMARTREST_ANALYTICS_BACKEND_MODE", "db_strict")
+    get_settings.cache_clear()
+
+    item_response = fetch_item_performance_tool(
+        ItemPerformanceRequest(
+            metric=ItemPerformanceMetric.ITEM_REVENUE,
+            date_from=date_from,
+            date_to=date_to,
+            ranking_mode=RankingMode.TOP_K,
+            limit=5,
+            scope=scope,
+        )
+    )
+    customer_response = fetch_customer_summary_tool(
+        CustomerSummaryRequest(date_from=date_from, date_to=date_to, scope=scope)
+    )
+    receipt_response = fetch_receipt_summary_tool(
+        ReceiptSummaryRequest(date_from=date_from, date_to=date_to, scope=scope)
+    )
+
+    assert item_response.items
+    assert customer_response.total_order_count >= customer_response.identified_order_count
+    assert receipt_response.receipt_count >= receipt_response.linked_order_count
+    get_settings.cache_clear()

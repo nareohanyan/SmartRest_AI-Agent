@@ -20,6 +20,11 @@ from app.agent.tools.analytics import (
     moving_average_tool,
     trend_slope_tool,
 )
+from app.agent.tools.business_insights import (
+    fetch_customer_summary_tool,
+    fetch_item_performance_tool,
+    fetch_receipt_summary_tool,
+)
 from app.agent.tools.ranking import bottom_k_tool, sort_items_tool, top_k_tool
 from app.agent.tools.retrieval import (
     fetch_breakdown_tool,
@@ -33,6 +38,9 @@ __all__ = [
     "compute_metrics_tool",
     "compute_scalar_metrics_tool",
     "fetch_breakdown_tool",
+    "fetch_customer_summary_tool",
+    "fetch_item_performance_tool",
+    "fetch_receipt_summary_tool",
     "fetch_timeseries_tool",
     "fetch_total_metric_tool",
     "get_report_definition_tool",

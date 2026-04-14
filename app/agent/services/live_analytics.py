@@ -11,6 +11,11 @@ from sqlalchemy.orm import Session
 
 from app.agent.formula_ast import evaluate_formula_ast
 from app.agent.metric_registry import MetricType, get_metric_registry
+from app.agent.services.smartrest_query_support import (
+    apply_order_filters,
+    sales_total_expression,
+    source_bucket_expression,
+)
 from app.agent.tools.math_helpers import quantize_decimal
 from app.schemas.analysis import (
     BreakdownItem,
@@ -209,11 +214,6 @@ class LiveAnalyticsService:
         metric_ids: tuple[str, ...],
         bucket_expression: Any | None = None,
     ):
-        if scope.source is not None:
-            raise LiveAnalyticsUnsupportedError(
-                "Source-scoped live analytics are not supported yet."
-            )
-
         metric_columns = [
             _base_metric_expression(metric_id).label(metric_id)
             for metric_id in metric_ids
@@ -226,12 +226,14 @@ class LiveAnalyticsService:
                 bucket_expression
             ).order_by(bucket_expression)
 
-        statement = statement.where(Order.profile_id == scope.profile_id)
-        statement = statement.where(func.date(Order.order_create_date) >= date_from)
-        statement = statement.where(func.date(Order.order_create_date) <= date_to)
-        if scope.branch_ids:
-            statement = statement.where(Order.branch_id.in_(scope.branch_ids))
-        return statement
+        return apply_order_filters(
+            statement,
+            profile_id=scope.profile_id,
+            date_from=date_from,
+            date_to=date_to,
+            branch_ids=scope.branch_ids,
+            source=scope.source,
+        )
 
 
 def _require_scope(scope: RetrievalScope | None) -> RetrievalScope:
@@ -274,10 +276,7 @@ _SUPPORTED_BASE_METRICS = {
 
 def _base_metric_expression(metric_id: str):
     if metric_id == "sales_total":
-        return func.coalesce(
-            func.sum(func.coalesce(Order.final_total, Order.total_price, 0)),
-            0,
-        )
+        return sales_total_expression()
     if metric_id in {"order_count", "completed_order_count"}:
         return func.count(Order.id)
     if metric_id == "discount_amount":
@@ -366,6 +365,8 @@ def _dimension_expression(
         return func.extract("hour", Order.order_create_date), _normalize_hour_bucket
     if dimension is DimensionName.WEEKDAY:
         return func.extract("dow", Order.order_create_date), _normalize_weekday_bucket
+    if dimension is DimensionName.SOURCE:
+        return source_bucket_expression(), _normalize_source_bucket
     if dimension is DimensionName.BRANCH:
         return Order.branch_id, _normalize_branch_bucket
     if dimension is DimensionName.CASHIER:
@@ -385,6 +386,12 @@ def _normalize_weekday_bucket(value: Any) -> str:
     if value is None:
         return "unknown_weekday"
     return _WEEKDAY_LABELS.get(int(value), f"weekday_{int(value)}")
+
+
+def _normalize_source_bucket(value: Any) -> str:
+    if value is None:
+        return "unknown_source"
+    return str(value)
 
 
 def _normalize_branch_bucket(value: Any) -> str:

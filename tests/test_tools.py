@@ -7,18 +7,28 @@ from types import SimpleNamespace
 import pytest
 
 from app.agent.tool_registry import ToolId, get_tool_registry
+from app.agent.tools import business_insights as business_insights_tools
 from app.agent.tools import retrieval as retrieval_tools
+from app.core.runtime_policy import RuntimePolicyError
 from app.schemas.analysis import (
     BreakdownItem,
     BreakdownRequest,
     BreakdownResponse,
+    CustomerSummaryRequest,
+    CustomerSummaryResponse,
     DimensionName,
+    ItemPerformanceItem,
+    ItemPerformanceMetric,
+    ItemPerformanceRequest,
+    ItemPerformanceResponse,
     MetricName,
+    RankingMode,
+    ReceiptSummaryRequest,
+    ReceiptSummaryResponse,
     RetrievalScope,
     TimeseriesPoint,
     TimeseriesRequest,
     TimeseriesResponse,
-    ToolWarningCode,
     TotalMetricRequest,
     TotalMetricResponse,
 )
@@ -44,6 +54,9 @@ def test_tool_registry_has_expected_approved_tool_set() -> None:
         ToolId.FETCH_TOTAL_METRIC,
         ToolId.FETCH_BREAKDOWN,
         ToolId.FETCH_TIMESERIES,
+        ToolId.FETCH_ITEM_PERFORMANCE,
+        ToolId.FETCH_CUSTOMER_SUMMARY,
+        ToolId.FETCH_RECEIPT_SUMMARY,
         ToolId.ATTACH_BREAKDOWN_SHARE,
         ToolId.TOP_K,
         ToolId.BOTTOM_K,
@@ -52,7 +65,27 @@ def test_tool_registry_has_expected_approved_tool_set() -> None:
     }
 
 
-def test_tool_registry_invokes_registered_tool_with_typed_request() -> None:
+def test_tool_registry_invokes_registered_tool_with_typed_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _LiveService:
+        def get_total_metric(self, request: TotalMetricRequest) -> TotalMetricResponse:
+            return TotalMetricResponse(
+                metric=request.metric,
+                date_from=request.date_from,
+                date_to=request.date_to,
+                value=Decimal("99"),
+                base_metrics={"sales_total": Decimal("99"), "day_count": Decimal("7")},
+                warnings=[],
+            )
+
+    monkeypatch.setattr(
+        retrieval_tools,
+        "get_settings",
+        lambda: SimpleNamespace(analytics_backend_mode="db_strict"),
+    )
+    monkeypatch.setattr(retrieval_tools, "get_live_analytics_service", lambda: _LiveService())
+    get_tool_registry.cache_clear()
     registry = get_tool_registry()
 
     response = registry.invoke(
@@ -61,11 +94,13 @@ def test_tool_registry_invokes_registered_tool_with_typed_request() -> None:
             metric=MetricName.SALES_TOTAL,
             date_from=date(2026, 3, 1),
             date_to=date(2026, 3, 7),
+            scope=RetrievalScope(profile_id=98),
         ),
     )
 
     assert response.metric is MetricName.SALES_TOTAL
-    assert ToolWarningCode.SYNTHETIC_DATA in response.warnings
+    assert response.warnings == []
+    get_tool_registry.cache_clear()
 
 
 def test_tool_registry_rejects_unregistered_tool() -> None:
@@ -189,3 +224,171 @@ def test_fetch_timeseries_tool_uses_live_service_when_scope_is_present(
 
     assert response.points[0].value == Decimal("5")
     assert response.warnings == []
+
+
+def test_fetch_item_performance_tool_uses_live_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _LiveService:
+        def get_item_performance(
+            self, request: ItemPerformanceRequest
+        ) -> ItemPerformanceResponse:
+            assert request.scope is not None
+            return ItemPerformanceResponse(
+                metric=request.metric,
+                date_from=request.date_from,
+                date_to=request.date_to,
+                ranking_mode=request.ranking_mode,
+                items=[
+                    ItemPerformanceItem(
+                        menu_item_id=11,
+                        name="Lahmajo",
+                        value=Decimal("321.50"),
+                    )
+                ],
+                warnings=[],
+            )
+
+    monkeypatch.setattr(
+        business_insights_tools,
+        "get_settings",
+        lambda: SimpleNamespace(analytics_backend_mode="db_strict"),
+    )
+    monkeypatch.setattr(
+        business_insights_tools,
+        "LiveBusinessToolsService",
+        lambda: _LiveService(),
+    )
+
+    response = business_insights_tools.fetch_item_performance_tool(
+        ItemPerformanceRequest(
+            metric=ItemPerformanceMetric.ITEM_REVENUE,
+            date_from=date(2026, 3, 1),
+            date_to=date(2026, 3, 7),
+            ranking_mode=RankingMode.TOP_K,
+            scope=RetrievalScope(profile_id=201),
+        )
+    )
+
+    assert response.items[0].name == "Lahmajo"
+    assert response.warnings == []
+
+
+def test_fetch_customer_summary_tool_uses_live_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _LiveService:
+        def get_customer_summary(
+            self, request: CustomerSummaryRequest
+        ) -> CustomerSummaryResponse:
+            assert request.scope is not None
+            return CustomerSummaryResponse(
+                date_from=request.date_from,
+                date_to=request.date_to,
+                unique_clients=12,
+                identified_order_count=48,
+                total_order_count=60,
+                average_orders_per_identified_client=Decimal("4.00"),
+                warnings=[],
+            )
+
+    monkeypatch.setattr(
+        business_insights_tools,
+        "get_settings",
+        lambda: SimpleNamespace(analytics_backend_mode="db_strict"),
+    )
+    monkeypatch.setattr(
+        business_insights_tools,
+        "LiveBusinessToolsService",
+        lambda: _LiveService(),
+    )
+
+    response = business_insights_tools.fetch_customer_summary_tool(
+        CustomerSummaryRequest(
+            date_from=date(2026, 3, 1),
+            date_to=date(2026, 3, 7),
+            scope=RetrievalScope(profile_id=201),
+        )
+    )
+
+    assert response.unique_clients == 12
+    assert response.average_orders_per_identified_client == Decimal("4.00")
+
+
+def test_fetch_receipt_summary_tool_uses_live_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _LiveService:
+        def get_receipt_summary(
+            self, request: ReceiptSummaryRequest
+        ) -> ReceiptSummaryResponse:
+            assert request.scope is not None
+            return ReceiptSummaryResponse(
+                date_from=request.date_from,
+                date_to=request.date_to,
+                receipt_count=15,
+                linked_order_count=14,
+                status_counts={"30": 10, "50": 5},
+                warnings=[],
+            )
+
+    monkeypatch.setattr(
+        business_insights_tools,
+        "get_settings",
+        lambda: SimpleNamespace(analytics_backend_mode="db_strict"),
+    )
+    monkeypatch.setattr(
+        business_insights_tools,
+        "LiveBusinessToolsService",
+        lambda: _LiveService(),
+    )
+
+    response = business_insights_tools.fetch_receipt_summary_tool(
+        ReceiptSummaryRequest(
+            date_from=date(2026, 3, 1),
+            date_to=date(2026, 3, 7),
+            scope=RetrievalScope(profile_id=201),
+        )
+    )
+
+    assert response.receipt_count == 15
+    assert response.status_counts["30"] == 10
+
+
+def test_fetch_total_metric_strict_environment_rejects_mock_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        retrieval_tools,
+        "get_settings",
+        lambda: SimpleNamespace(app_env="staging", analytics_backend_mode="mock"),
+    )
+
+    with pytest.raises(RuntimePolicyError, match="analytics_backend_mode=db_strict"):
+        retrieval_tools.fetch_total_metric_tool(
+            TotalMetricRequest(
+                metric=MetricName.SALES_TOTAL,
+                date_from=date(2026, 3, 1),
+                date_to=date(2026, 3, 7),
+            )
+        )
+
+
+def test_fetch_item_performance_tool_rejects_mock_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        business_insights_tools,
+        "get_settings",
+        lambda: SimpleNamespace(app_env="staging", analytics_backend_mode="mock"),
+    )
+
+    with pytest.raises(RuntimePolicyError, match="analytics_backend_mode=db_strict"):
+        business_insights_tools.fetch_item_performance_tool(
+            ItemPerformanceRequest(
+                metric=ItemPerformanceMetric.ITEM_REVENUE,
+                date_from=date(2026, 3, 1),
+                date_to=date(2026, 3, 7),
+                scope=RetrievalScope(profile_id=201),
+            )
+        )
