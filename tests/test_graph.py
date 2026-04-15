@@ -466,6 +466,43 @@ def test_item_business_query_routes_to_business_tool_path(
     assert all(result.status == "completed" for result in final_state.legacy_task_results)
 
 
+def test_armenian_top_selling_items_answer_is_ranked_quantity_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_registry = graph_module.get_tool_registry()
+
+    class _BusinessRegistry:
+        def invoke(self, tool_id: ToolId | str, request: Any) -> Any:
+            normalized = ToolId(tool_id)
+            if normalized is ToolId.FETCH_ITEM_PERFORMANCE:
+                return ItemPerformanceResponse(
+                    metric=ItemPerformanceMetric.QUANTITY_SOLD,
+                    date_from=request.date_from,
+                    date_to=request.date_to,
+                    ranking_mode=request.ranking_mode,
+                    items=[
+                        ItemPerformanceItem(menu_item_id=1, name="Լահմաջո պանրով", value=123),
+                        ItemPerformanceItem(menu_item_id=2, name="Լահմաջո", value=100),
+                    ],
+                    warnings=[],
+                )
+            return base_registry.invoke(normalized, request)
+
+    monkeypatch.setattr(graph_module, "get_tool_registry", lambda: _BusinessRegistry())
+    graph = build_agent_graph()
+    payload = _initial_state("Որո՞նք են վերջին 3 ամսվա տոփ 5 ամենավաճառված ապրանքները։")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.policy_route is PolicyRoute.RUN_BUSINESS_QUERY
+    assert final_state.final_answer is not None
+    assert "Ահա" in final_state.final_answer
+    assert "1. Լահմաջո պանրով — 123 հատ" in final_state.final_answer
+    assert "2. Լահմաջո — 100 հատ" in final_state.final_answer
+    assert "դրամ" not in final_state.final_answer
+
+
 def test_compound_request_returns_partial_success_for_unsupported_task() -> None:
     graph = build_agent_graph()
     payload = _initial_state(

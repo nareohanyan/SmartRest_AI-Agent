@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.agent.planning import plan_analysis
+from app.agent.planning import _shift_months, _shift_years, plan_analysis
 from app.agent.tools import compute_metrics_tool, fetch_total_metric_tool
 from app.agent.tools import retrieval as retrieval_tools
 from app.agent.tools.math_helpers import quantize_decimal
@@ -81,6 +81,15 @@ def test_planner_routes_item_query_to_business_tool_plan() -> None:
     assert plan.business_query.limit == 5
 
 
+def test_planner_routes_armenian_most_sold_items_to_quantity_metric() -> None:
+    plan = plan_analysis("Որո՞նք են վերջին 3 ամսվա տոփ 5 ամենավաճառված ապրանքները։")
+
+    assert plan.business_query is not None
+    assert plan.business_query.kind is BusinessQueryKind.ITEM_PERFORMANCE
+    assert plan.business_query.item_metric is ItemPerformanceMetric.QUANTITY_SOLD
+    assert plan.business_query.limit == 5
+
+
 def test_planner_routes_customer_query_to_business_tool_plan() -> None:
     plan = plan_analysis("Show customers 2026-03-01 to 2026-03-07")
 
@@ -103,6 +112,16 @@ def test_relative_today_is_mapped_to_single_day_range() -> None:
     assert plan.retrieval is not None
     assert plan.retrieval.date_from == today
     assert plan.retrieval.date_to == today
+
+
+def test_relative_tomorrow_is_mapped_to_single_day_range() -> None:
+    tomorrow = date.today() + date.resolution
+    plan = plan_analysis("Какие продажи завтра?")
+
+    assert plan.intent is AnalysisIntent.METRIC_TOTAL
+    assert plan.retrieval is not None
+    assert plan.retrieval.date_from == tomorrow
+    assert plan.retrieval.date_to == tomorrow
 
 
 def test_relative_yesterday_is_mapped_to_single_day_range() -> None:
@@ -135,6 +154,64 @@ def test_relative_this_month_is_mapped_to_month_start_until_today() -> None:
     assert plan.retrieval.date_to == today
 
 
+def test_relative_past_month_is_mapped_to_rolling_thirty_days() -> None:
+    today = date.today()
+    plan = plan_analysis("Show sales for the past month")
+
+    assert plan.intent is AnalysisIntent.METRIC_TOTAL
+    assert plan.retrieval is not None
+    assert plan.retrieval.date_from == today - date.resolution * 29
+    assert plan.retrieval.date_to == today
+
+
+def test_relative_armenian_three_month_item_query_is_supported() -> None:
+    today = date.today()
+    plan = plan_analysis("վերջին 3 ամսվա ամենաշատ վաճառված ապրանքը")
+
+    assert plan.business_query is not None
+    assert plan.business_query.kind is BusinessQueryKind.ITEM_PERFORMANCE
+    assert plan.business_query.date_to == today
+    assert plan.business_query.date_from == _shift_months(today, -3) + date.resolution
+
+
+def test_relative_russian_two_weeks_is_mapped_to_fourteen_days() -> None:
+    today = date.today()
+    plan = plan_analysis("Покажи продажи за последние 2 недели")
+
+    assert plan.intent is AnalysisIntent.METRIC_TOTAL
+    assert plan.retrieval is not None
+    assert plan.retrieval.date_from == today - date.resolution * 13
+    assert plan.retrieval.date_to == today
+
+
+def test_relative_previous_month_is_mapped_to_previous_calendar_month() -> None:
+    today = date.today()
+    current_month_start = today.replace(day=1)
+    previous_month_end = current_month_start - date.resolution
+    previous_month_start = previous_month_end.replace(day=1)
+    plan = plan_analysis("Покажи продажи за прошлый месяц")
+
+    assert plan.intent is AnalysisIntent.METRIC_TOTAL
+    assert plan.retrieval is not None
+    assert plan.retrieval.date_from == previous_month_start
+    assert plan.retrieval.date_to == previous_month_end
+
+
+def test_armenian_possessive_revenue_form_routes_to_sales_total() -> None:
+    today = date.today()
+    current_month_start = today.replace(day=1)
+    previous_month_end = current_month_start - date.resolution
+    previous_month_start = previous_month_end.replace(day=1)
+
+    plan = plan_analysis("Նախորդ ամսվա եկամուտս ինչքա՞նա կազմել։")
+
+    assert plan.intent is AnalysisIntent.METRIC_TOTAL
+    assert plan.retrieval is not None
+    assert plan.retrieval.metric is MetricName.SALES_TOTAL
+    assert plan.retrieval.date_from == previous_month_start
+    assert plan.retrieval.date_to == previous_month_end
+
+
 def test_relative_past_30_days_is_mapped_to_bounded_range() -> None:
     today = date.today()
     plan = plan_analysis("Show sales for the past 30 days")
@@ -143,6 +220,36 @@ def test_relative_past_30_days_is_mapped_to_bounded_range() -> None:
     assert plan.retrieval is not None
     assert plan.retrieval.date_from == today - date.resolution * 29
     assert plan.retrieval.date_to == today
+
+
+def test_relative_this_year_is_mapped_to_year_start_until_today() -> None:
+    today = date.today()
+    plan = plan_analysis("Ցույց տուր վաճառքը այս տարի")
+
+    assert plan.intent is AnalysisIntent.METRIC_TOTAL
+    assert plan.retrieval is not None
+    assert plan.retrieval.date_from == today.replace(month=1, day=1)
+    assert plan.retrieval.date_to == today
+
+
+def test_relative_past_two_years_is_mapped_to_rolling_year_window() -> None:
+    today = date.today()
+    plan = plan_analysis("Show sales for the past 2 years")
+
+    assert plan.intent is AnalysisIntent.METRIC_TOTAL
+    assert plan.retrieval is not None
+    assert plan.retrieval.date_from == _shift_years(today, -2) + date.resolution
+    assert plan.retrieval.date_to == today
+
+
+def test_relative_last_year_is_mapped_to_previous_calendar_year() -> None:
+    today = date.today()
+    plan = plan_analysis("Show sales last year")
+
+    assert plan.intent is AnalysisIntent.METRIC_TOTAL
+    assert plan.retrieval is not None
+    assert plan.retrieval.date_from == today.replace(year=today.year - 1, month=1, day=1)
+    assert plan.retrieval.date_to == today.replace(year=today.year - 1, month=12, day=31)
 
 
 def test_comparison_plan_includes_previous_period_retrieval() -> None:

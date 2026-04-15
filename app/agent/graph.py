@@ -42,12 +42,16 @@ from app.schemas.analysis import (
     AnalysisIntent,
     BreakdownRequest,
     BusinessQueryKind,
+    BusinessQuerySpec,
     CustomerSummaryRequest,
     DimensionName,
+    ItemPerformanceMetric,
     ItemPerformanceRequest,
+    ItemPerformanceResponse,
     LegacyReportTask,
     LegacyReportTaskResult,
     MovingAverageRequest,
+    RankingMode,
     RankItemsRequest,
     ReceiptSummaryRequest,
     RetrievalScope,
@@ -78,6 +82,118 @@ def _smalltalk_answer(language: str) -> str:
     if language == "ru":
         return "Здравствуйте. Чем я могу вам сегодня помочь?"
     return "Hello. Nice to see you here."
+
+
+def _item_metric_label(metric: ItemPerformanceMetric, language: str) -> str:
+    if metric is ItemPerformanceMetric.QUANTITY_SOLD:
+        return (
+            "ամենավաճառված ապրանքները"
+            if language == "hy"
+            else (
+                "самые продаваемые товары"
+                if language == "ru"
+                else "top selling items"
+            )
+        )
+    if metric is ItemPerformanceMetric.DISTINCT_ORDERS:
+        return (
+            "ամենաշատ պատվիրված ապրանքները"
+            if language == "hy"
+            else (
+                "самые часто заказываемые товары"
+                if language == "ru"
+                else "most frequently ordered items"
+            )
+        )
+    return (
+        "ամենաեկամտաբեր ապրանքները"
+        if language == "hy"
+        else (
+            "самые доходные товары"
+            if language == "ru"
+            else "highest revenue items"
+        )
+    )
+
+
+def _format_item_value(
+    *,
+    metric: ItemPerformanceMetric,
+    value: Decimal,
+    language: str,
+) -> str:
+    if metric is ItemPerformanceMetric.QUANTITY_SOLD:
+        quantized = int(value) if value == value.to_integral_value() else f"{value:.2f}"
+        suffix = " հատ" if language == "hy" else (" шт." if language == "ru" else " units")
+        return f"{quantized}{suffix}"
+    if metric is ItemPerformanceMetric.DISTINCT_ORDERS:
+        quantized = int(value) if value == value.to_integral_value() else f"{value:.2f}"
+        suffix = (
+            " պատվեր" if language == "hy" else (" заказов" if language == "ru" else " orders")
+        )
+        return f"{quantized}{suffix}"
+    suffix = " դրամ" if language == "hy" else (" драм" if language == "ru" else "")
+    return f"{value:.2f}{suffix}"
+
+
+def _build_item_performance_summary(
+    *,
+    business_query: BusinessQuerySpec,
+    response: ItemPerformanceResponse,
+    language: str,
+) -> str:
+    if not response.items:
+        return (
+            (
+                f"{business_query.date_from}-ից մինչև "
+                f"{business_query.date_to} տվյալներով ապրանքներ չեն գտնվել։"
+            )
+            if language == "hy"
+            else (
+                (
+                    f"За период с {business_query.date_from} по "
+                    f"{business_query.date_to} товары не найдены."
+                )
+                if language == "ru"
+                else (
+                    f"No items were found from {business_query.date_from} "
+                    f"to {business_query.date_to}."
+                )
+            )
+        )
+
+    ranking_label = (
+        "տոփ" if business_query.ranking_mode is RankingMode.TOP_K else "վերջին"
+        if language == "hy"
+        else (
+            "топ" if business_query.ranking_mode is RankingMode.TOP_K else "последние"
+            if language == "ru"
+            else "top" if business_query.ranking_mode is RankingMode.TOP_K else "bottom"
+        )
+    )
+    metric_label = _item_metric_label(response.metric, language)
+    if language == "hy":
+        header = (
+            f"Ահա {business_query.date_from}-ից մինչև {business_query.date_to} "
+            f"{ranking_label} {len(response.items)} {metric_label}։"
+        )
+    elif language == "ru":
+        header = (
+            f"Вот {ranking_label} {len(response.items)} {metric_label} "
+            f"за период с {business_query.date_from} по {business_query.date_to}."
+        )
+    else:
+        header = (
+            f"Here are the {ranking_label} {len(response.items)} {metric_label} "
+            f"from {business_query.date_from} to {business_query.date_to}."
+        )
+
+    lines = [
+        f"{index}. {item.name} — "
+        f"{_format_item_value(metric=response.metric, value=item.value, language=language)}"
+        for index, item in enumerate(response.items, start=1)
+    ]
+    return "\n".join([header, *lines])
 
 
 def _safe_unsupported_answer(language: str) -> str:
@@ -1117,6 +1233,7 @@ def _run_business_query_node(state: AgentState) -> dict[str, Any]:
     execution_trace = state.execution_trace
     retrieval_scope = _build_retrieval_scope(state)
     business_query = plan.business_query
+    language = _question_language(state.user_question)
 
     if business_query.kind is BusinessQueryKind.ITEM_PERFORMANCE:
         if business_query.item_metric is None:
@@ -1143,12 +1260,10 @@ def _run_business_query_node(state: AgentState) -> dict[str, Any]:
             output_ref="item_performance_response",
             started_at=started_at,
         )
-        summary_items = ", ".join(
-            f"{item.name}={item.value:.2f}" for item in response.items
-        ) or "no items found"
-        summary = (
-            f"Item performance for {business_query.date_from} to {business_query.date_to} "
-            f"({response.metric.value}): {summary_items}."
+        summary = _build_item_performance_summary(
+            business_query=business_query,
+            response=response,
+            language=language,
         )
         return {
             "analysis_artifacts": {

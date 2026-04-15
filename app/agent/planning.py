@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import calendar
 import re
 from datetime import date, timedelta
+from functools import lru_cache
 
 from app.agent.metric_registry import get_dimension_alias_index, get_metric_alias_index
 from app.agent.planner_lexicon import get_planner_lexicon
@@ -38,6 +40,93 @@ _PLANNER_LEXICON = get_planner_lexicon()
 _ITEM_QUERY_RE = re.compile(
     r"(?:item|dish|menu item|product|ապրանք|ուտեստ|блюдо|товар)\s+"
     r"([a-zA-Z0-9\u0400-\u04FF\u0531-\u058F'’ -]{2,})"
+)
+_EN_NUMERIC_RELATIVE_RE = re.compile(
+    r"\b(?:last|past|previous)\s+(\d{1,3})\s+"
+    r"(day|days|week|weeks|month|months|year|years)\b"
+)
+_HY_NUMERIC_RELATIVE_RE = re.compile(
+    r"\b(?:վերջին|նախորդ|անցած)\s+(\d{1,3})\s+"
+    r"(օր|օրվա|օրերի|շաբաթ|շաբաթվա|շաբաթների|ամիս|ամսվա|ամիսների|տարի|տարվա|տարիների)\b"
+)
+_RU_NUMERIC_RELATIVE_RE = re.compile(
+    r"\b(?:последн\w*|предыдущ\w*|прошл\w*)\s+(\d{1,3})\s+"
+    r"(день|дня|дней|неделя|недели|недель|месяц|месяца|месяцев|год|года|лет)\b"
+)
+_NUMERIC_RELATIVE_MAX_VALUE = 120
+_ARMENIAN_TOKEN_SUFFIXES = ("ս", "դ", "ը", "ն")
+_ITEM_ENTITY_TERMS = {
+    "item",
+    "items",
+    "dish",
+    "dishes",
+    "menu",
+    "menu item",
+    "product",
+    "products",
+    "ուտեստ",
+    "մենյու",
+    "ապրանք",
+    "ապրանքներ",
+    "блюдо",
+    "блюда",
+    "меню",
+    "товар",
+    "товары",
+}
+_ITEM_QUANTITY_TERMS = {
+    "most sold",
+    "top selling",
+    "best selling",
+    "most popular",
+    "sold",
+    "selling",
+    "quantity",
+    "qty",
+    "popular",
+    "ամենավաճառված",
+    "ամենաշատ վաճառված",
+    "շատ վաճառված",
+    "վաճառված",
+    "քանակ",
+    "самое продаваемое",
+    "самые продаваемые",
+    "продаваем",
+    "по количеству",
+    "колич",
+    "популяр",
+}
+_ITEM_REVENUE_TERMS = {
+    "highest revenue",
+    "top revenue",
+    "most revenue",
+    "highest grossing",
+    "revenue",
+    "sales value",
+    "item revenue",
+    "ամենաեկամտաբեր",
+    "ամենաշատ եկամուտ",
+    "եկամտաբեր",
+    "եկամուտ",
+    "высокая выручка",
+    "по выручке",
+    "выруч",
+    "доход",
+    "прибыл",
+}
+_ITEM_DISTINCT_ORDER_TERMS = {
+    "distinct orders",
+    "order presence",
+    "most ordered",
+    "by orders",
+    "պատվեր",
+    "պատվերներով",
+    "заказ",
+    "заказы",
+    "по заказам",
+}
+_SALES_CONCEPT_TERMS = {"revenue", "income", "earnings", "եկամուտ", "доход"} | (
+    _PLANNER_LEXICON.sales_metric_terms
 )
 
 
@@ -84,13 +173,65 @@ def _count_term_hits(normalized_question: str, tokens: set[str], terms: set[str]
             if term in normalized_question:
                 hits += 1
             continue
-        if term in tokens:
+        if term in tokens or any(token.startswith(term) for token in tokens):
             hits += 1
     return hits
 
 
+@lru_cache(maxsize=1)
+def _semantic_base_tokens() -> frozenset[str]:
+    base_terms: set[str] = set()
+    lexicon_fields = (
+        _PLANNER_LEXICON.metric_terms,
+        _PLANNER_LEXICON.high_priority_business_terms,
+        _PLANNER_LEXICON.operation_terms,
+        _PLANNER_LEXICON.dimension_terms,
+        _PLANNER_LEXICON.average_metric_terms,
+        _PLANNER_LEXICON.order_metric_terms,
+        _PLANNER_LEXICON.sales_metric_terms,
+        _PLANNER_LEXICON.breakdown_terms,
+        _PLANNER_LEXICON.ranking_top_terms,
+        _PLANNER_LEXICON.ranking_bottom_terms,
+        _PLANNER_LEXICON.trend_terms,
+        _PLANNER_LEXICON.comparison_terms,
+        _ITEM_ENTITY_TERMS,
+        _ITEM_QUANTITY_TERMS,
+        _ITEM_REVENUE_TERMS,
+        _ITEM_DISTINCT_ORDER_TERMS,
+        _SALES_CONCEPT_TERMS,
+    )
+    for field in lexicon_fields:
+        base_terms.update(term for term in field if " " not in term)
+    base_terms.update(alias for alias in get_metric_alias_index() if " " not in alias)
+    base_terms.update(alias for alias in get_dimension_alias_index() if " " not in alias)
+    return frozenset(base_terms)
+
+
+def _semantic_token_candidates(token: str) -> set[str]:
+    candidates = {token}
+    if _ARMENIAN_CHAR_RE.search(token) is None:
+        return candidates
+
+    for suffix in _ARMENIAN_TOKEN_SUFFIXES:
+        if not token.endswith(suffix):
+            continue
+        if len(token) <= len(suffix) + 1:
+            continue
+        stripped = token[: -len(suffix)]
+        if stripped in _semantic_base_tokens():
+            candidates.add(stripped)
+    return candidates
+
+
+def _semantic_tokens(normalized_question: str) -> set[str]:
+    tokens: set[str] = set()
+    for token in normalized_question.split():
+        tokens.update(_semantic_token_candidates(token))
+    return tokens
+
+
 def _contains_business_signal(normalized_question: str) -> bool:
-    tokens = set(normalized_question.split())
+    tokens = _semantic_tokens(normalized_question)
     high_priority_hits = _count_term_hits(
         normalized_question,
         tokens,
@@ -164,33 +305,161 @@ def _parse_relative_date_range(
         return None
 
     today = reference_date or date.today()
+    numeric_relative_range = _parse_numeric_relative_date_range(
+        normalized=normalized,
+        reference_date=today,
+    )
+    if numeric_relative_range is not None:
+        return numeric_relative_range
+
+    tomorrow = today + timedelta(days=1)
     yesterday = today - timedelta(days=1)
     last_week_start = today - timedelta(days=7)
     last_week_end = today - timedelta(days=1)
     month_start = today.replace(day=1)
+    previous_month_end = month_start - timedelta(days=1)
+    previous_month_start = previous_month_end.replace(day=1)
     past_30_days_start = today - timedelta(days=29)
+    past_month_start = today - timedelta(days=29)
+    year_start = today.replace(month=1, day=1)
+    last_year_start = today.replace(year=today.year - 1, month=1, day=1)
+    last_year_end = today.replace(year=today.year - 1, month=12, day=31)
 
     matches: list[tuple[date, date]] = []
     if _has_any_phrase(normalized, _PLANNER_LEXICON.relative_today_terms):
         matches.append((today, today))
+    if _has_any_phrase(normalized, _PLANNER_LEXICON.relative_tomorrow_terms):
+        matches.append((tomorrow, tomorrow))
     if _has_any_phrase(normalized, _PLANNER_LEXICON.relative_yesterday_terms):
         matches.append((yesterday, yesterday))
     if _has_any_phrase(normalized, _PLANNER_LEXICON.relative_last_week_terms):
         matches.append((last_week_start, last_week_end))
     if _has_any_phrase(normalized, _PLANNER_LEXICON.relative_this_month_terms):
         matches.append((month_start, today))
+    if _has_any_phrase(normalized, _PLANNER_LEXICON.relative_past_month_terms):
+        matches.append((past_month_start, today))
+    if _has_any_phrase(normalized, _PLANNER_LEXICON.relative_previous_month_terms):
+        matches.append((previous_month_start, previous_month_end))
     if _has_any_phrase(normalized, _PLANNER_LEXICON.relative_past_30_days_terms):
         matches.append((past_30_days_start, today))
+    if _has_any_phrase(normalized, _PLANNER_LEXICON.relative_this_year_terms):
+        matches.append((year_start, today))
+    if _has_any_phrase(normalized, _PLANNER_LEXICON.relative_last_year_terms):
+        matches.append((last_year_start, last_year_end))
 
     if len(matches) == 1:
         return matches[0]
     return None
 
 
+def _parse_numeric_relative_date_range(
+    *,
+    normalized: str,
+    reference_date: date,
+) -> tuple[date, date] | None:
+    for pattern, unit_resolver in (
+        (_EN_NUMERIC_RELATIVE_RE, _resolve_en_relative_unit),
+        (_HY_NUMERIC_RELATIVE_RE, _resolve_hy_relative_unit),
+        (_RU_NUMERIC_RELATIVE_RE, _resolve_ru_relative_unit),
+    ):
+        match = pattern.search(normalized)
+        if not match:
+            continue
+
+        value = int(match.group(1))
+        if value < 1 or value > _NUMERIC_RELATIVE_MAX_VALUE:
+            return None
+
+        unit = unit_resolver(match.group(2))
+        if unit is None:
+            return None
+
+        return _materialize_numeric_relative_range(
+            reference_date=reference_date,
+            value=value,
+            unit=unit,
+        )
+    return None
+
+
+def _resolve_en_relative_unit(raw_unit: str) -> str | None:
+    if raw_unit.startswith("day"):
+        return "day"
+    if raw_unit.startswith("week"):
+        return "week"
+    if raw_unit.startswith("month"):
+        return "month"
+    if raw_unit.startswith("year"):
+        return "year"
+    return None
+
+
+def _resolve_hy_relative_unit(raw_unit: str) -> str | None:
+    if raw_unit.startswith("օր"):
+        return "day"
+    if raw_unit.startswith("շաբաթ"):
+        return "week"
+    if raw_unit.startswith("ամիս") or raw_unit.startswith("ամս"):
+        return "month"
+    if raw_unit.startswith("տարի") or raw_unit.startswith("տար"):
+        return "year"
+    return None
+
+
+def _resolve_ru_relative_unit(raw_unit: str) -> str | None:
+    if raw_unit.startswith("д"):
+        return "day"
+    if raw_unit.startswith("недел") or raw_unit.startswith("неделя"):
+        return "week"
+    if raw_unit.startswith("меся"):
+        return "month"
+    if raw_unit.startswith("год") or raw_unit == "лет":
+        return "year"
+    return None
+
+
+def _materialize_numeric_relative_range(
+    *,
+    reference_date: date,
+    value: int,
+    unit: str,
+) -> tuple[date, date]:
+    if unit == "day":
+        return (reference_date - timedelta(days=value - 1), reference_date)
+    if unit == "week":
+        return (reference_date - timedelta(days=(value * 7) - 1), reference_date)
+    if unit == "month":
+        start = _shift_months(reference_date, -value) + timedelta(days=1)
+        return (start, reference_date)
+    if unit == "year":
+        start = _shift_years(reference_date, -value) + timedelta(days=1)
+        return (start, reference_date)
+    raise PlanningError(f"Unsupported numeric relative unit: {unit}")
+
+
+def _shift_months(base_date: date, months_delta: int) -> date:
+    total_month_index = (base_date.year * 12) + (base_date.month - 1) + months_delta
+    target_year, target_month_index = divmod(total_month_index, 12)
+    target_month = target_month_index + 1
+    target_day = min(
+        base_date.day,
+        calendar.monthrange(target_year, target_month)[1],
+    )
+    return date(target_year, target_month, target_day)
+
+
+def _shift_years(base_date: date, years_delta: int) -> date:
+    target_year = base_date.year + years_delta
+    target_day = min(
+        base_date.day,
+        calendar.monthrange(target_year, base_date.month)[1],
+    )
+    return date(target_year, base_date.month, target_day)
+
+
 def _detect_metric(question: str) -> MetricName | None:
     normalized = _normalize_text(question)
-
-    tokens = set(normalized.split())
+    tokens = _semantic_tokens(normalized)
     alias_items = sorted(
         get_metric_alias_index().items(),
         key=lambda item: len(item[0]),
@@ -208,18 +477,18 @@ def _detect_metric(question: str) -> MetricName | None:
         except ValueError:
             continue
 
-    if _has_any_phrase(normalized, _PLANNER_LEXICON.average_metric_terms):
+    if _count_term_hits(normalized, tokens, _PLANNER_LEXICON.average_metric_terms) > 0:
         return MetricName.AVERAGE_CHECK
-    if _has_any_phrase(normalized, _PLANNER_LEXICON.order_metric_terms):
+    if _count_term_hits(normalized, tokens, _PLANNER_LEXICON.order_metric_terms) > 0:
         return MetricName.ORDER_COUNT
-    if _has_any_phrase(normalized, _PLANNER_LEXICON.sales_metric_terms):
+    if _count_term_hits(normalized, tokens, _SALES_CONCEPT_TERMS) > 0:
         return MetricName.SALES_TOTAL
     return None
 
 
 def _detect_dimension(question: str) -> DimensionName | None:
     normalized = _normalize_text(question)
-    tokens = set(normalized.split())
+    tokens = _semantic_tokens(normalized)
     alias_items = sorted(
         get_dimension_alias_index().items(),
         key=lambda item: len(item[0]),
@@ -328,14 +597,15 @@ def _needs_breakdown(question: str) -> bool:
         return True
     if _detect_dimension(question) is None:
         return False
-    return any(token in normalized.split() for token in ("by", "per", "ըստ", "по"))
+    tokens = _semantic_tokens(normalized)
+    return any(token in tokens for token in ("by", "per", "ըստ", "по"))
 
 
 def _extract_ranking_k(question: str) -> int:
     normalized = _normalize_text(question)
     patterns = [
         r"(?:top|bottom|best|worst|highest|lowest)\s+(\d{1,2})",
-        r"(?:լավագույն|վատագույն|ամենաբարձր|ամենացածր)\s+(\d{1,2})",
+        r"(?:տոփ|լավագույն|վատագույն|ամենաբարձր|ամենացածր)\s+(\d{1,2})",
         r"(?:топ|лучш\w*|худш\w*|сам\w*\s+высок\w*|сам\w*\s+низк\w*)\s+(\d{1,2})",
     ]
     for pattern in patterns:
@@ -364,52 +634,41 @@ def _needs_trend(question: str) -> bool:
 
 def _needs_comparison(question: str) -> bool:
     normalized = _normalize_text(question)
-    return _has_any_phrase(normalized, _PLANNER_LEXICON.comparison_terms)
+    sanitized = normalized
+    for phrase in (
+        _PLANNER_LEXICON.relative_previous_month_terms
+        | _PLANNER_LEXICON.relative_last_year_terms
+        | _PLANNER_LEXICON.relative_last_week_terms
+    ):
+        sanitized = sanitized.replace(phrase, " ")
+    sanitized = re.sub(r"\s+", " ", sanitized).strip()
+    return (
+        _count_term_hits(
+            sanitized,
+            _semantic_tokens(sanitized),
+            _PLANNER_LEXICON.comparison_terms,
+        )
+        > 0
+    )
 
 
 def _is_item_business_query(question: str) -> bool:
     normalized = _normalize_text(question)
-    item_terms = {
-        "item",
-        "items",
-        "dish",
-        "dishes",
-        "menu",
-        "menu item",
-        "product",
-        "products",
-        "ուտեստ",
-        "մենյու",
-        "ապրանք",
-        "блюдо",
-        "блюда",
-        "меню",
-        "товар",
-        "товары",
-    }
     performance_terms = {
         "top",
         "bottom",
         "best",
         "worst",
-        "sold",
-        "sales",
-        "revenue",
-        "quantity",
-        "qty",
         "performance",
-        "popular",
         "լավագույն",
         "վատագույն",
-        "վաճառք",
-        "քանակ",
-        "популяр",
-        "продаж",
-        "выруч",
-        "колич",
+        "топ",
     }
-    return any(term in normalized for term in item_terms) and any(
+    return any(term in normalized for term in _ITEM_ENTITY_TERMS) and any(
         term in normalized for term in performance_terms
+        | _ITEM_QUANTITY_TERMS
+        | _ITEM_REVENUE_TERMS
+        | _ITEM_DISTINCT_ORDER_TERMS
     )
 
 
@@ -452,10 +711,13 @@ def _is_receipt_business_query(question: str) -> bool:
 
 def _detect_item_metric(question: str) -> ItemPerformanceMetric:
     normalized = _normalize_text(question)
-    if any(term in normalized for term in {"quantity", "qty", "sold", "քանակ", "колич"}):
+    tokens = _semantic_tokens(normalized)
+    if _count_term_hits(normalized, tokens, _ITEM_QUANTITY_TERMS) > 0:
         return ItemPerformanceMetric.QUANTITY_SOLD
-    if any(term in normalized for term in {"distinct orders", "order presence", "заказ", "պատվեր"}):
+    if _count_term_hits(normalized, tokens, _ITEM_DISTINCT_ORDER_TERMS) > 0:
         return ItemPerformanceMetric.DISTINCT_ORDERS
+    if _count_term_hits(normalized, tokens, _ITEM_REVENUE_TERMS) > 0:
+        return ItemPerformanceMetric.ITEM_REVENUE
     return ItemPerformanceMetric.ITEM_REVENUE
 
 

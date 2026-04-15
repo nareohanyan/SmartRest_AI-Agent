@@ -208,6 +208,11 @@
     "այսօր",
     "сегодня"
   ],
+  "relative_tomorrow_terms": [
+    "tomorrow",
+    "վաղը",
+    "завтра"
+  ],
   "relative_yesterday_terms": [
     "yesterday",
     "երեկ",
@@ -227,6 +232,27 @@
     "этот месяц",
     "в этом месяце"
   ],
+  "relative_past_month_terms": [
+    "past month",
+    "for the past month",
+    "over the past month",
+    "վերջին ամիս",
+    "վերջին մեկ ամիս",
+    "անցած ամիսվա ընթացքում",
+    "за последний месяц",
+    "за прошедший месяц"
+  ],
+  "relative_previous_month_terms": [
+    "previous month",
+    "last month",
+    "նախորդ ամիս",
+    "նախորդ ամսվա",
+    "անցած ամիս",
+    "անցած ամսվա",
+    "прошлый месяц",
+    "предыдущий месяц",
+    "в прошлом месяце"
+  ],
   "relative_past_30_days_terms": [
     "past 30 days",
     "last 30 days",
@@ -234,6 +260,22 @@
     "անցած 30 օր",
     "за последние 30 дней",
     "последние 30 дней"
+  ],
+  "relative_this_year_terms": [
+    "this year",
+    "այս տարի",
+    "в этом году",
+    "этот год",
+    "текущий год"
+  ],
+  "relative_last_year_terms": [
+    "last year",
+    "previous year",
+    "անցած տարի",
+    "նախորդ տարի",
+    "прошлый год",
+    "предыдущий год",
+    "в прошлом году"
   ],
   "average_metric_terms": [
     "average check",

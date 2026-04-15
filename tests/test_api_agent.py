@@ -15,9 +15,17 @@ import app.agent.report_tools as report_tools
 from app.agent.tools import business_insights as business_insights_tools
 from app.agent.tools import retrieval as retrieval_tools
 from app.api.app import create_app
-from app.api.routes.agent import _get_runtime_service, _get_subscription_service
-from app.api.schemas import AgentRunRequest
-from app.core.auth import build_canonical_payload, sign_payload_token
+from app.api.routes.agent import (
+    _get_platform_admin_dependency,
+    _get_runtime_service,
+    _get_subscription_service,
+)
+from app.api.schemas import AgentRunRequest, PlatformAdminRunRequest
+from app.core.auth import (
+    build_canonical_payload,
+    build_platform_admin_canonical_payload,
+    sign_payload_token,
+)
 from app.core.config import get_settings
 from app.schemas.analysis import (
     BreakdownItem,
@@ -35,6 +43,7 @@ from app.schemas.reports import ReportMetric, ReportResult, ReportType
 from app.schemas.subscription import SubscriptionAccessDecision
 from app.schemas.tools import RunReportResponse
 from app.services.agent_runtime import AgentRuntimeExecutionError
+from app.services.platform_admin import PlatformAdminProfileSummary
 
 pytestmark = pytest.mark.anyio
 
@@ -58,6 +67,7 @@ def _disable_openai_client(monkeypatch: pytest.MonkeyPatch) -> None:
     get_settings.cache_clear()
     monkeypatch.setattr(graph_module, "get_llm_client", _missing_openai_key)
     monkeypatch.setenv("SMARTREST_AUTH_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("SMARTREST_PLATFORM_ADMIN_SECRET_KEY", "admin-secret")
     monkeypatch.setattr(
         report_tools,
         "get_canonical_identity_resolver",
@@ -166,6 +176,41 @@ def _request_payload(
             "profile_nick": "nick",
             "metadata": metadata or {},
         },
+    }
+
+
+def _admin_auth_payload(
+    *,
+    admin_id: str = "owner",
+    current_timestamp: int | None = None,
+) -> dict[str, Any]:
+    issued_at = current_timestamp if current_timestamp is not None else int(time.time())
+    canonical_payload = build_platform_admin_canonical_payload(
+        current_timestamp=issued_at,
+        admin_id=admin_id,
+    )
+    return {
+        "admin_id": admin_id,
+        "current_timestamp": issued_at,
+        "token": sign_payload_token("admin-secret", canonical_payload),
+    }
+
+
+def _admin_run_payload(
+    question: str,
+    *,
+    target_profile_id: int = 98,
+    target_profile_nick: str = "tunlahmajo_1681123576",
+    target_user_id: int = 101,
+) -> dict[str, Any]:
+    return {
+        "chat_id": "11111111-1111-1111-1111-111111111111",
+        "user_question": question,
+        "admin_auth": _admin_auth_payload(),
+        "target_profile_id": target_profile_id,
+        "target_profile_nick": target_profile_nick,
+        "target_user_id": target_user_id,
+        "metadata": {},
     }
 
 
@@ -291,6 +336,50 @@ async def test_denied_scope_returns_denied_and_blocks_report_path(
     assert payload["answer"] is not None
 
 
+@pytest.fixture(autouse=True)
+def _platform_admin_dependency(app: FastAPI) -> Iterator[None]:
+    class _PlatformAdminService:
+        def list_profiles(self) -> list[PlatformAdminProfileSummary]:
+            return [
+                PlatformAdminProfileSummary(
+                    profile_id=98,
+                    name="Tun Lahmajo",
+                    profile_nick="tunlahmajo_1681123576",
+                    subscription_status="expired",
+                    subscription_expires_at=None,
+                    default_user_id=101,
+                    user_count=40,
+                )
+            ]
+
+        def resolve_target(
+            self,
+            *,
+            target_profile_id: int,
+            target_profile_nick: str | None = None,
+            target_user_id: int | None = None,
+        ) -> Any:
+            del target_profile_nick
+            return type(
+                "_Identity",
+                (),
+                {
+                    "profile_nick": "tunlahmajo_1681123576",
+                    "profile_id": target_profile_id,
+                    "user_id": target_user_id or 101,
+                },
+            )()
+
+    async def _override_admin_service() -> _PlatformAdminService:
+        return _PlatformAdminService()
+
+    app.dependency_overrides[_get_platform_admin_dependency] = _override_admin_service
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(_get_platform_admin_dependency, None)
+
+
 def _fake_run_smartrest_report(request: Any, *, profile_id: int) -> RunReportResponse:
     del profile_id
     metric_map = {
@@ -407,6 +496,81 @@ async def test_invalid_auth_token_returns_401(api_client: AsyncClient) -> None:
     assert response.json() == {"detail": "Unauthorized"}
 
 
+async def test_platform_admin_profiles_returns_profiles(api_client: AsyncClient) -> None:
+    response = await api_client.post(
+        "/agent/admin/profiles",
+        json={"admin_auth": _admin_auth_payload()},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["profiles"][0]["profile_id"] == 98
+    assert payload["profiles"][0]["default_user_id"] == 101
+
+
+async def test_platform_admin_run_bypasses_subscription_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    api_client: AsyncClient,
+) -> None:
+    monkeypatch.setenv("SMARTREST_PLATFORM_ADMIN_BYPASS_SUBSCRIPTION", "true")
+    get_settings.cache_clear()
+
+    response = await api_client.post(
+        "/agent/admin/run",
+        json=_admin_run_payload("What were total sales 2026-03-01 to 2026-03-07?"),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert "platform_admin_mode" in payload["warnings"]
+    assert "platform_admin_subscription_bypass" in payload["warnings"]
+
+
+async def test_platform_admin_run_checks_subscription_when_bypass_disabled(
+    app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+    api_client: AsyncClient,
+) -> None:
+    monkeypatch.setenv("SMARTREST_PLATFORM_ADMIN_BYPASS_SUBSCRIPTION", "false")
+    get_settings.cache_clear()
+
+    class _DenyingSubscriptionService:
+        def evaluate_access(self, _verified_identity: Any) -> SubscriptionAccessDecision:
+            return SubscriptionAccessDecision(
+                allowed=False,
+                reason_code="subscription_expired",
+                reason_message="AI agent subscription is inactive.",
+            )
+
+    async def _override_subscription_service() -> _DenyingSubscriptionService:
+        return _DenyingSubscriptionService()
+
+    app.dependency_overrides[_get_subscription_service] = _override_subscription_service
+    try:
+        response = await api_client.post(
+            "/agent/admin/run",
+            json=_admin_run_payload("What were total sales 2026-03-01 to 2026-03-07?"),
+        )
+    finally:
+        app.dependency_overrides.pop(_get_subscription_service, None)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "AI agent subscription is inactive."}
+
+
+async def test_platform_admin_run_invalid_token_returns_401(
+    api_client: AsyncClient,
+) -> None:
+    payload = _admin_run_payload("What were total sales 2026-03-01 to 2026-03-07?")
+    payload["admin_auth"]["token"] = "0" * 64
+
+    response = await api_client.post("/agent/admin/run", json=payload)
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Unauthorized"}
+
+
 async def test_mismatched_auth_and_scope_identity_returns_422(api_client: AsyncClient) -> None:
     payload = _request_payload("What were total sales 2026-03-01 to 2026-03-07?")
     payload["auth"]["profile_nick"] = "other"
@@ -462,6 +626,11 @@ async def test_runtime_failure_returns_controlled_500(
 ) -> None:
     class _FailingRuntime:
         def run(self, _request: AgentRunRequest, **_kwargs: Any) -> Any:
+            raise AgentRuntimeExecutionError("boom")
+
+        def run_as_platform_admin(
+            self, _request: PlatformAdminRunRequest, **_kwargs: Any
+        ) -> Any:
             raise AgentRuntimeExecutionError("boom")
 
     async def _override_dependency() -> _FailingRuntime:

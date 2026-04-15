@@ -33,6 +33,14 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("SMARTREST_AUTH_SECRET_KEY", "SECRET_KEY"),
     )
+    platform_admin_secret_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SMARTREST_PLATFORM_ADMIN_SECRET_KEY",
+            "PLATFORM_ADMIN_SECRET_KEY",
+        ),
+    )
+    platform_admin_bypass_subscription: bool = False
     auth_token_max_age_seconds: int = 300
     auth_token_max_future_skew_seconds: int = 30
 

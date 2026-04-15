@@ -7,8 +7,8 @@ from uuid import uuid4
 
 from app.agent.graph import build_agent_graph
 from app.agent.llm.exceptions import LLMClientError
-from app.api.schemas import AgentRunRequest, AgentRunResponse
-from app.core.auth import VerifiedIdentity
+from app.api.schemas import AgentRunRequest, AgentRunResponse, PlatformAdminRunRequest
+from app.core.auth import VerifiedIdentity, VerifiedPlatformAdmin
 from app.persistence.runtime_persistence import (
     RuntimePersistenceService,
     get_runtime_persistence_service,
@@ -54,30 +54,82 @@ class AgentRuntimeService:
         *,
         verified_identity: VerifiedIdentity,
     ) -> AgentRunResponse:
-        start_persistence_result = self._persistence_service.start_run(
+        scope_request = ResolveScopeRequest.model_validate(
+            {
+                "user_id": verified_identity.user_id,
+                "profile_id": verified_identity.profile_id,
+                "profile_nick": verified_identity.profile_nick,
+                "metadata": request.scope_request.metadata,
+                "requested_branch_ids": request.scope_request.requested_branch_ids,
+                "requested_export_mode": request.scope_request.requested_export_mode,
+            }
+        )
+        return self._run_internal(
             chat_id=request.chat_id,
-            user_id=verified_identity.user_id,
-            profile_id=verified_identity.profile_id,
-            profile_nick=verified_identity.profile_nick,
+            user_question=request.user_question,
+            scope_request=scope_request,
+            persistence_identity=verified_identity,
+            metadata_json={
+                "chat_id": str(request.chat_id),
+                "actor_type": "tenant_user",
+            },
+        )
+
+    def run_as_platform_admin(
+        self,
+        request: PlatformAdminRunRequest,
+        *,
+        target_identity: VerifiedIdentity,
+        verified_admin: VerifiedPlatformAdmin,
+    ) -> AgentRunResponse:
+        scope_request = ResolveScopeRequest.model_validate(
+            {
+                "user_id": target_identity.user_id,
+                "profile_id": target_identity.profile_id,
+                "profile_nick": target_identity.profile_nick,
+                "metadata": request.metadata,
+                "requested_branch_ids": request.requested_branch_ids,
+                "requested_export_mode": request.requested_export_mode,
+            }
+        )
+        return self._run_internal(
+            chat_id=request.chat_id,
+            user_question=request.user_question,
+            scope_request=scope_request,
+            persistence_identity=target_identity,
+            metadata_json={
+                "chat_id": str(request.chat_id),
+                "actor_type": "platform_admin",
+                "admin_id": verified_admin.admin_id,
+                "target_profile_id": target_identity.profile_id,
+                "target_user_id": target_identity.user_id,
+            },
+        )
+
+    def _run_internal(
+        self,
+        *,
+        chat_id: Any,
+        user_question: str,
+        scope_request: ResolveScopeRequest,
+        persistence_identity: VerifiedIdentity,
+        metadata_json: dict[str, Any],
+    ) -> AgentRunResponse:
+        start_persistence_result = self._persistence_service.start_run(
+            chat_id=chat_id,
+            user_id=persistence_identity.user_id,
+            profile_id=persistence_identity.profile_id,
+            profile_nick=persistence_identity.profile_nick,
             intent=None,
-            metadata_json={"chat_id": str(request.chat_id)},
+            metadata_json=metadata_json,
         )
         start_warnings = start_persistence_result.warnings
         run_id = start_persistence_result.internal_run_id or uuid4()
         initial_state = AgentState(
-            chat_id=request.chat_id,
+            chat_id=chat_id,
             run_id=run_id,
-            user_question=request.user_question,
-            scope_request=ResolveScopeRequest.model_validate(
-                {
-                    "user_id": verified_identity.user_id,
-                    "profile_id": verified_identity.profile_id,
-                    "profile_nick": verified_identity.profile_nick,
-                    "metadata": request.scope_request.metadata,
-                    "requested_branch_ids": request.scope_request.requested_branch_ids,
-                    "requested_export_mode": request.scope_request.requested_export_mode,
-                }
-            ),
+            user_question=user_question,
+            scope_request=scope_request,
             needs_clarification=False,
             status=RunStatus.RUNNING,
         )
@@ -91,7 +143,7 @@ class AgentRuntimeService:
                 chat_id=start_persistence_result.chat_id,
                 internal_run_id=start_persistence_result.internal_run_id,
                 status=RunStatus.FAILED,
-                question=request.user_question,
+                question=user_question,
                 answer=None,
                 error_message=str(exc),
                 error_code=f"llm_{exc.category.value}",
@@ -105,7 +157,7 @@ class AgentRuntimeService:
                 chat_id=start_persistence_result.chat_id,
                 internal_run_id=start_persistence_result.internal_run_id,
                 status=RunStatus.FAILED,
-                question=request.user_question,
+                question=user_question,
                 answer=None,
                 error_message=str(exc),
                 error_code="runtime_internal_error",
