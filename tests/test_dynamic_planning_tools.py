@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.agent.planning import _shift_months, _shift_years, plan_analysis
+from app.agent.planning import _parse_question, _shift_months, _shift_years, plan_analysis
 from app.agent.tools import compute_metrics_tool, fetch_total_metric_tool
 from app.agent.tools import retrieval as retrieval_tools
 from app.agent.tools.math_helpers import quantize_decimal
@@ -15,6 +15,7 @@ from app.schemas.analysis import (
     DimensionName,
     ItemPerformanceMetric,
     MetricName,
+    RankingMode,
     RetrievalMode,
     RetrievalScope,
     TotalMetricRequest,
@@ -79,6 +80,28 @@ def test_planner_routes_item_query_to_business_tool_plan() -> None:
     assert plan.business_query.kind is BusinessQueryKind.ITEM_PERFORMANCE
     assert plan.business_query.item_metric is ItemPerformanceMetric.ITEM_REVENUE
     assert plan.business_query.limit == 5
+
+
+def test_planner_routes_word_number_item_query_to_requested_k() -> None:
+    plan = plan_analysis("Show top five menu items 2026-03-01 to 2026-03-07")
+
+    assert plan.business_query is not None
+    assert plan.business_query.kind is BusinessQueryKind.ITEM_PERFORMANCE
+    assert plan.business_query.limit == 5
+
+
+def test_parse_question_builds_structured_business_query_for_armenian_word_number_prompt() -> None:
+    today = date.today()
+    parsed = _parse_question("Նախորդ երկու ամսվա մեջ ամենաշատ վաճառված ապրանքը ո՞րն է եղել։")
+
+    assert parsed.date_range is not None
+    assert parsed.business_query is not None
+    assert parsed.business_query.kind is BusinessQueryKind.ITEM_PERFORMANCE
+    assert parsed.business_query.item_metric is ItemPerformanceMetric.QUANTITY_SOLD
+    assert parsed.ranking_mode is RankingMode.TOP_K
+    assert parsed.ranking_k == 1
+    assert parsed.date_range.date_from == _shift_months(today, -2) + date.resolution
+    assert parsed.date_range.date_to == today
 
 
 def test_planner_routes_armenian_most_sold_items_to_quantity_metric() -> None:
@@ -172,6 +195,31 @@ def test_relative_armenian_three_month_item_query_is_supported() -> None:
     assert plan.business_query.kind is BusinessQueryKind.ITEM_PERFORMANCE
     assert plan.business_query.date_to == today
     assert plan.business_query.date_from == _shift_months(today, -3) + date.resolution
+    assert plan.business_query.limit == 1
+
+
+def test_relative_armenian_word_number_item_query_is_supported() -> None:
+    today = date.today()
+    plan = plan_analysis("Նախորդ երկու ամսվա մեջ ամենաշատ վաճառված ապրանքը ո՞րն է եղել։")
+
+    assert plan.business_query is not None
+    assert plan.business_query.kind is BusinessQueryKind.ITEM_PERFORMANCE
+    assert plan.business_query.item_metric is ItemPerformanceMetric.QUANTITY_SOLD
+    assert plan.business_query.date_to == today
+    assert plan.business_query.date_from == _shift_months(today, -2) + date.resolution
+    assert plan.business_query.limit == 1
+
+
+def test_relative_armenian_word_number_item_query_with_typo_variant_is_supported() -> None:
+    today = date.today()
+    plan = plan_analysis("Նախորդ երկու ամսվա մեջ ամենաշատ վաճարված ապրանքը ո՞րն է եղել։")
+
+    assert plan.business_query is not None
+    assert plan.business_query.kind is BusinessQueryKind.ITEM_PERFORMANCE
+    assert plan.business_query.item_metric is ItemPerformanceMetric.QUANTITY_SOLD
+    assert plan.business_query.date_to == today
+    assert plan.business_query.date_from == _shift_months(today, -2) + date.resolution
+    assert plan.business_query.limit == 1
 
 
 def test_relative_russian_two_weeks_is_mapped_to_fourteen_days() -> None:
