@@ -14,9 +14,12 @@ from app.schemas.reports import ReportType
 
 class MetricName(str, Enum):
     SALES_TOTAL = "sales_total"
+    GROSS_SALES_TOTAL = "gross_sales_total"
     ORDER_COUNT = "order_count"
     AVERAGE_CHECK = "average_check"
     COMPLETED_ORDER_COUNT = "completed_order_count"
+    DISCOUNTED_ORDER_COUNT = "discounted_order_count"
+    DISCOUNTED_ORDER_SHARE = "discounted_order_share"
     CANCELED_ORDER_COUNT = "canceled_order_count"
     REFUND_AMOUNT = "refund_amount"
     DISCOUNT_AMOUNT = "discount_amount"
@@ -24,6 +27,8 @@ class MetricName(str, Enum):
     DISCOUNT_SHARE = "discount_share"
     DELIVERY_ORDER_COUNT = "delivery_order_count"
     DINE_IN_ORDER_COUNT = "dine_in_order_count"
+    QUANTITY_SOLD = "quantity_sold"
+    ITEMS_PER_ORDER = "items_per_order"
 
 
 class DimensionName(str, Enum):

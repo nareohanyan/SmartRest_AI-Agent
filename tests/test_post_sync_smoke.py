@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import date, timedelta
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import create_engine, inspect, select
@@ -12,15 +13,20 @@ from app.agent.tools.business_insights import (
     fetch_item_performance_tool,
     fetch_receipt_summary_tool,
 )
+from app.agent.tools.retrieval import fetch_breakdown_tool, fetch_total_metric_tool
 from app.core.config import get_settings
 from app.reports.smartrest_backend import run_smartrest_report
 from app.schemas.analysis import (
+    BreakdownRequest,
     CustomerSummaryRequest,
+    DimensionName,
     ItemPerformanceMetric,
     ItemPerformanceRequest,
+    MetricName,
     RankingMode,
     ReceiptSummaryRequest,
     RetrievalScope,
+    TotalMetricRequest,
 )
 from app.schemas.reports import ReportFilters, ReportRequest, ReportType
 from app.services.canonical_identity import CanonicalIdentityResolver
@@ -225,4 +231,117 @@ def test_post_sync_live_business_tools_execute_for_one_synced_profile(
     assert item_response.items
     assert customer_response.total_order_count >= customer_response.identified_order_count
     assert receipt_response.receipt_count >= receipt_response.linked_order_count
+    get_settings.cache_clear()
+
+
+def test_post_sync_live_breakdown_tools_execute_for_payment_method_and_category(
+    operational_engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with Session(bind=operational_engine) as session:
+        row = session.execute(
+            select(Order.profile_id, Order.order_create_date)
+            .where(Order.order_create_date.is_not(None))
+            .order_by(Order.order_create_date.desc())
+            .limit(1)
+        ).one()
+
+    date_to = row.order_create_date.date()
+    date_from = date_to - timedelta(days=29)
+    scope = RetrievalScope(profile_id=int(row.profile_id))
+
+    monkeypatch.setenv("SMARTREST_ANALYTICS_BACKEND_MODE", "db_strict")
+    get_settings.cache_clear()
+
+    payment_response = fetch_breakdown_tool(
+        BreakdownRequest(
+            metric=MetricName.SALES_TOTAL,
+            dimension=DimensionName.PAYMENT_METHOD,
+            date_from=date_from,
+            date_to=date_to,
+            scope=scope,
+        )
+    )
+    category_response = fetch_breakdown_tool(
+        BreakdownRequest(
+            metric=MetricName.SALES_TOTAL,
+            dimension=DimensionName.CATEGORY,
+            date_from=date_from,
+            date_to=date_to,
+            scope=scope,
+        )
+    )
+
+    assert payment_response.items
+    assert any(item.label in {"cash", "card", "idram"} for item in payment_response.items)
+    assert (
+        sum((item.value for item in payment_response.items), Decimal("0"))
+        == payment_response.total_value
+    )
+
+    assert category_response.items
+    assert all(item.label.strip() for item in category_response.items)
+    assert (
+        sum((item.value for item in category_response.items), Decimal("0"))
+        == category_response.total_value
+    )
+    get_settings.cache_clear()
+
+
+def test_post_sync_live_total_tools_execute_for_new_metrics(
+    operational_engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with Session(bind=operational_engine) as session:
+        row = session.execute(
+            select(Order.profile_id, Order.order_create_date)
+            .where(Order.order_create_date.is_not(None))
+            .order_by(Order.order_create_date.desc())
+            .limit(1)
+        ).one()
+
+    date_to = row.order_create_date.date()
+    date_from = date_to - timedelta(days=29)
+    scope = RetrievalScope(profile_id=int(row.profile_id))
+
+    monkeypatch.setenv("SMARTREST_ANALYTICS_BACKEND_MODE", "db_strict")
+    get_settings.cache_clear()
+
+    quantity_response = fetch_total_metric_tool(
+        TotalMetricRequest(
+            metric=MetricName.QUANTITY_SOLD,
+            date_from=date_from,
+            date_to=date_to,
+            scope=scope,
+        )
+    )
+    gross_sales_response = fetch_total_metric_tool(
+        TotalMetricRequest(
+            metric=MetricName.GROSS_SALES_TOTAL,
+            date_from=date_from,
+            date_to=date_to,
+            scope=scope,
+        )
+    )
+    sales_total_response = fetch_total_metric_tool(
+        TotalMetricRequest(
+            metric=MetricName.SALES_TOTAL,
+            date_from=date_from,
+            date_to=date_to,
+            scope=scope,
+        )
+    )
+    items_per_order_response = fetch_total_metric_tool(
+        TotalMetricRequest(
+            metric=MetricName.ITEMS_PER_ORDER,
+            date_from=date_from,
+            date_to=date_to,
+            scope=scope,
+        )
+    )
+
+    assert quantity_response.value >= 0
+    assert gross_sales_response.value >= 0
+    assert gross_sales_response.value >= sales_total_response.value
+    assert items_per_order_response.value >= 0
     get_settings.cache_clear()

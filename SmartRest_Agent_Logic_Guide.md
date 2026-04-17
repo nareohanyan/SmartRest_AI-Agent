@@ -1,489 +1,396 @@
-# SmartRest Agent — Logic Guide
+# SmartRest Agent Logic Guide
+
+This document explains how the project works today.
+
+Use it as the technical narrative for the repository:
+
+- what the system is
+- how requests move through it
+- where business truth comes from
+- how the data layer fits in
+- what is already solid
+- what still needs hardening
 
-This file explains the **whole logic of the project**.
+## 1. What This Project Is
+
+SmartRest AI Agent is a bounded business analytics service for SmartRest data.
+
+It is not a generic chatbot and it is not an open-ended database agent.
+
+Its job is to:
 
-Whenever the project starts feeling confusing, this is the file to read.
+1. accept a signed SmartRest request
+2. verify identity and subscription access
+3. resolve execution scope
+4. interpret the business question into a typed plan
+5. execute approved report or analytics tools
+6. compose a grounded answer
+7. persist runtime artifacts for inspection
 
-Its purpose is to answer:
+The system is designed to answer business questions such as:
+
+- total sales in a time window
+- order count and average check
+- comparisons versus a previous period
+- rankings and breakdowns
+- trends over time
+- selected business insight queries backed by trusted tools
+
+## 2. Core Design Position
 
-- What are we actually building?
-- Why are we building it this way?
-- What is an agent in this project?
-- What is LangGraph doing?
-- What is OpenAI doing?
-- What are tools?
-- Why are we delaying database integration?
-- How does everything connect together?
+The project is intentionally constrained.
 
----
+The model is allowed to help with interpretation and response phrasing, but it is not the source of business truth. Business numbers must come from tools and database-backed retrieval.
 
-# 1. What the project really is
+That design choice drives the whole architecture:
 
-This project is **not** a generic chatbot.
+- FastAPI is the transport boundary
+- LangGraph owns orchestration
+- typed schemas define contracts
+- tools are explicit and bounded
+- SmartRest-backed services provide the data
+- persistence records what happened
 
-It is a **SmartRest business-reporting agent**.
+## 3. High-Level Architecture
 
-That means the system should ultimately do this:
+```text
+Client
+  |
+  v
+FastAPI API Layer
+  |
+  v
+Auth + Subscription Gate
+  |
+  v
+Agent Runtime Service
+  |
+  v
+LangGraph Workflow
+  |         |             |                 |
+  |         |             |                 +--> Runtime persistence
+  |         |             |
+  |         |             +--> OpenAI planning / response style layer
+  |         |
+  |         +--> Tool Registry
+  |                |
+  |                +--> scope resolution
+  |                +--> report execution
+  |                +--> analytics retrieval
+  |                +--> ranking / trend / calculations
+  |
+  +--> SmartRest operational database
+      Chat analytics database
+      Sync pipeline inputs
+```
 
-1. receive a business question from a SmartRest user
-2. understand what the user wants
-3. understand what data/report is needed
-4. check what the user is allowed to access
-5. choose the correct strategy
-6. call tools to get the needed information
-7. return a useful and correct answer
+## 4. Main Runtime Components
 
-Examples:
-- “What were Glovo sales last month?”
-- “How many orders did we have yesterday?”
-- “What is the average check this week?”
-- “Compare delivery channels for March.”
+### API Layer
 
-So the project is about **intelligent reporting and analytics**, not free-form chatting.
+The API surface lives under `app/api`.
 
----
+Responsibilities:
 
-# 2. What a real agent means here
+- receive and validate request payloads
+- verify signed tenant or platform-admin auth
+- check subscription access
+- call the runtime service
+- return the final contract
 
-A real agent is **not just an LLM call**.
+Non-responsibilities:
 
-A real agent in this project means a system that has:
+- no graph routing logic
+- no KPI calculation
+- no direct database querying from route handlers
 
-- state
-- workflow
-- tool usage
-- routing decisions
-- persistence
-- controlled outputs
+### Runtime Service
 
-In other words, a real agent must:
-- reason about the request
-- choose what to do next
-- call tools instead of inventing data
-- keep execution state
-- produce a final answer based on tool outputs
+`app/services/agent_runtime.py` is the execution boundary between the API and the graph.
 
-So the project becomes a real agent only when these parts exist together.
+Responsibilities:
 
----
+- build the initial typed state
+- start and finish runtime persistence
+- invoke the graph
+- normalize the final API response
+- classify runtime failures
 
-# 3. The 3-layer mental model
+### LangGraph Workflow
 
-The cleanest way to understand the architecture is this:
+`app/agent/graph.py` contains the orchestration logic.
 
-## Layer 1 — Agent runtime
-This is the orchestration brain.
+Current graph responsibilities include:
 
-Includes:
-- LangGraph workflow
-- agent state
-- routing logic
-- node execution
-- persistence
+- scope resolution
+- planning
+- policy gating
+- route selection
+- report execution
+- comparison / ranking / trend execution
+- business insight execution
+- clarification / rejection / smalltalk handling
+- answer composition
 
-## Layer 2 — Tool layer
-These are the actions the agent can take.
+The graph already carries structured state and execution trace data. It is functional, but it is also one of the largest files in the repository and is a clear future refactor target.
 
-Includes:
-- resolve scope
-- list reports
-- get report definitions
-- run reports
-- later: query SmartRest DB
+### Tool Layer
 
-## Layer 3 — Backend implementation
-This is where data and business retrieval actually happen.
+The tool layer is deliberately bounded. The registry in `app/agent/tool_registry.py` defines which operations exist and what request types they accept.
 
-Now:
-- mock/prototype backend
+Current tool families include:
 
-Later:
-- real SmartRest database / semantic reporting backend
+- scope and report tools
+- total / breakdown / timeseries retrieval
+- scalar metric calculations
+- ranking tools
+- moving average and trend slope tools
+- business insight tools for items, customers, and receipts
 
-The important idea is:
+This keeps the system inspectable and prevents uncontrolled tool growth.
 
-**Layers 1 and 2 can be built now. Layer 3 can be replaced later.**
+### Data and Backend Layer
 
-That is why we can build the real agent before the real DB is available.
+The repository is no longer purely mock-backed.
 
----
+There are real SmartRest-backed implementations for:
 
-# 4. Why we are not waiting for the database
+- canonical identity resolution
+- scope resolution
+- core report execution
+- live analytics retrieval
+- post-sync smoke validation
 
-Database access is a backend integration problem.
+The system is still hybrid in capability coverage, not in architecture. Some paths are fully grounded, while some advanced paths still need deeper live-data coverage and stricter trust-boundary handling.
 
-It is **not** the same thing as the agent runtime.
+### Persistence Layer
 
-If we wait for DB access before building the agent, we delay:
-- state design
-- workflow design
-- tool design
-- API shape
-- observability
-- tests
-- answer flow
+Runtime persistence writes execution metadata to the chat analytics database.
 
-That would be a mistake.
+The persistence layer supports:
 
-The correct approach is:
+- run lifecycle tracking
+- status mapping
+- message and answer recording
+- warnings around persistence behavior
 
-1. build the agent runtime now
-2. build stable tool interfaces now
-3. connect the real DB later through one backend/tool implementation
+This gives the project operational memory without pushing orchestration concerns into the API.
 
-So the future DB should be a **plug-in replacement**, not the center of the whole architecture.
+## 5. Request Lifecycle
 
----
+The normal tenant flow is:
 
-# 5. Why LangGraph is important
+1. client sends `/agent/run`
+2. signed payload is verified
+3. subscription access is checked
+4. runtime service starts a run record
+5. LangGraph receives the initial `AgentState`
+6. scope is resolved
+7. planning determines the intent and route
+8. policy gate validates the requested operation
+9. the graph executes one of the approved branches
+10. answer composition produces a grounded response
+11. runtime service finalizes persistence and returns the API contract
 
-LangGraph is the **runtime for the agent**.
+Platform-admin execution uses a parallel flow through `/agent/admin/run`, but target identity is resolved first and can optionally bypass subscription checks depending on environment settings.
 
-Without LangGraph, the system risks becoming:
-- many disconnected service files
-- route handlers that do too much
-- unclear execution flow
-- no real state machine
+## 6. Current Graph Branches
 
-LangGraph solves that by giving the project:
-- explicit state
-- explicit nodes
-- explicit transitions
-- durable execution
-- persistence/checkpointing
-- ability to add interrupts later
+The graph currently supports these broad outcomes:
 
-So when we say “where is the real agent?”, LangGraph is one of the main answers.
+- `completed`
+- `clarify`
+- `rejected`
+- `denied`
+- `failed`
+- `onboarding`
 
-It should be the place where the workflow lives.
+Operationally, the graph can execute:
 
----
+- legacy report path
+- multi-report path
+- comparison path
+- ranking path
+- trend path
+- business insight path
+- safe-answer path
+- clarification path
+- rejection path
+- smalltalk path
 
-# 6. Why OpenAI is important
+This means the project is already beyond the initial report-only baseline.
 
-OpenAI is **not** the whole agent.
+## 7. State Model
 
-It is one part of the system.
+`app/schemas/agent.py` defines the shared run state.
 
-In this project, OpenAI should be used for:
-- understanding the user question
-- extracting structured intent and filters
-- helping choose the right report path
-- composing the final answer naturally
+Important state groups include:
 
-At the beginning, OpenAI should **not** be used for:
-- direct raw SQL generation
-- unchecked business calculations
-- inventing answers without tools
+- request identity and question
+- resolved scope
+- selected intent and plan
+- selected report and filters
+- tool responses
+- analysis artifacts
+- execution trace
+- base and derived metrics
+- warnings
+- final answer and run status
 
-So OpenAI is the **interpretation and language layer**, not the source of truth.
+This is one of the strongest parts of the codebase: the runtime is not a pile of ad hoc dictionaries and disconnected service calls.
 
----
+## 8. Data Truth Policy
 
-# 7. Why tools are necessary
+Business truth should come from:
 
-If the model answers business questions directly, it can hallucinate.
+- report tool outputs
+- analytics retrieval outputs
+- deterministic calculation outputs
 
-That is dangerous for reporting.
+The model may:
 
-So the model should use tools.
+- classify intent
+- help interpret the question
+- help phrase the final answer
 
-A tool is simply a structured action the agent can call.
+The model must not:
 
-Examples:
-- resolve the user scope
-- list the reports the system supports
-- get the definition of a report
-- run a report
-- later: query the semantic reporting layer
+- invent KPI values
+- bypass tools
+- fabricate report outputs
+- act as the source of business truth
 
-The agent becomes trustworthy when:
-- the model decides what it needs
-- the tools fetch or compute that information
-- the final answer is based on those tool results
+## 9. Authentication and Access
 
----
+The service currently enforces:
 
-# 8. What the first real version of the agent should do
+- signed request verification
+- subscription access checks
+- canonical identity resolution
+- policy gating before execution
+- strict runtime configuration in non-development environments
 
-The first real version should support this flow:
+This is a meaningful strength, but one major issue remains:
 
-1. user sends a question
-2. agent resolves user scope
-3. agent uses OpenAI to interpret the question
-4. agent determines whether the request is:
-   - supported
-   - unclear
-   - unsupported
-5. if supported, the agent calls the correct report tool
-6. the agent receives the report result
-7. the agent composes a final answer
-8. the run is persisted
+client-provided metadata still influences parts of scope and permission shaping. That is acceptable for local development and controlled use, but it is not the final trust-boundary design for production.
 
-That is already a real working agent.
+In practical terms, the next hardening step is to move permission-bearing context fully to trusted server-side resolution.
 
----
+## 10. Runtime Modes and Configuration
 
-# 9. What the first graph should look like
+The project uses typed settings from `app/core/config.py`.
 
-The first LangGraph workflow should be simple.
+Important current characteristics:
 
-## Node 1 — `resolve_scope`
-Purpose:
-- determine who the user is
-- determine allowed scope
-- determine allowed reports or permissions
+- `development`, `local_acceptance`, `staging`, and `production` environments exist
+- strict environments enforce required secrets and database URLs
+- strict environments require `db_strict` backend modes
+- planner mode can be deterministic, hybrid, or llm
 
-## Node 2 — `interpret_request`
-Purpose:
-- use OpenAI to interpret the question
-- identify intent
-- identify report id
-- extract filters
-- decide whether clarification is needed
+This is materially stronger than the old documentation suggested. The repository already has fail-fast runtime policy checks.
 
-## Node 3 — `route_decision`
-Purpose:
-- choose the next step based on the interpreted request
+## 11. Databases and Sync
 
-Possible routes:
-- run report
-- ask clarification
-- reject unsupported request
+There are two main database concerns in the repo:
 
-## Node 4 — `run_report`
-Purpose:
-- call the report tool with the chosen report id and filters
+### SmartRest operational database
 
-## Node 5 — `compose_answer`
-Purpose:
-- produce the final user-facing answer
+Used for:
 
-## Optional nodes later
-- approval node
-- semantic query node
-- explanation node
-- anomaly explanation node
+- canonical identity resolution
+- report execution
+- analytics retrieval
+- post-sync validation
 
-The first graph must stay simple.
+### Chat analytics database
 
----
+Used for:
 
-# 10. What the state object is for
+- runtime persistence
+- analytics around conversations and execution lifecycle
 
-The state object is the shared memory of one agent run.
+### Sync pipeline
 
-It prevents the system from becoming a pile of disconnected function calls.
+The repo includes a real sync path for:
 
-It should carry the key facts of the run:
-- what the user asked
-- what scope was resolved
-- how the question was interpreted
-- which report was chosen
-- what filters were extracted
-- what tool outputs were produced
-- what final answer was returned
+- identity synchronization
+- mapped-table synchronization
+- SmartRest schema migrations and seeded mapping batches
 
-If the state is well-designed, the whole workflow becomes understandable.
+This is important because the agent is not operating on imaginary future data infrastructure anymore. The data pipeline is already part of the system.
 
----
+## 12. Testing Model
 
-# 11. What the API should and should not do
+The test suite is broad and is one of the strongest indicators of project maturity.
 
-## The API should do
-- receive the request
-- validate the payload
-- create ids / metadata
-- call the agent service
-- return the final result
+It covers:
 
-## The API should not do
-- business routing logic
-- report selection logic
-- interpretation logic
-- graph orchestration logic
-- deep business calculations
+- API contracts
+- auth logic
+- planner and parser logic
+- policy decisions
+- graph behavior
+- runtime persistence
+- report tools
+- live-backend behavior
+- migration behavior
+- post-sync smoke checks
 
-That logic belongs in the agent runtime and tools.
+There are also explicit `integration` and `post_sync` markers, which gives the repo a reasonable base for separating lightweight checks from DB-backed validation.
 
----
+## 13. What Is Already Strong
 
-# 12. Why report tools come before database tools
+The strongest parts of the repository are:
 
-Right now the project goal is to build a real agent runtime.
+- clear layering
+- typed contracts
+- bounded tool model
+- graph-based orchestration
+- strong test coverage
+- real DB integration already present
+- runtime persistence already wired
+- strict-environment configuration checks
 
-To do that, the agent needs something meaningful to call.
+This is not a toy prototype anymore. It is a structured backend system with real runtime shape.
 
-The safest first meaningful tools are deterministic report tools.
+## 14. What Is Still Weak
 
-Why?
-Because they are:
-- easier to test
-- easier to reason about
-- safer than ad-hoc SQL
-- closer to real business answers
+The main weaknesses are not about missing architecture. They are about trust, completeness, and operability.
 
-Later, when the SmartRest DB is ready, those report tools can use the real reporting backend underneath.
+### Trust boundary still needs hardening
 
-So the path is:
+Some request metadata still influences effective scope behavior. That should be tightened before calling the system production-safe.
 
-1. report tools now
-2. DB-backed implementations later
+### Live analytics coverage is incomplete
 
----
+Some advanced analytics paths still have narrower live-data support than the planner and graph structure suggest.
 
-# 13. What the backend abstraction means
+### Documentation drift existed
 
-The backend abstraction is the line that separates:
-- the agent runtime
-from
-- the data implementation
+Several older docs described a pre-integration state that no longer matched the codebase. This guide is intended to replace that confusion with one current explanation.
 
-This is extremely important.
+### Graph complexity is concentrated
 
-If the agent runtime depends directly on the DB structure, then every DB issue blocks the whole project.
+`app/agent/graph.py` is effective but too large. It works, but it should eventually be modularized to reduce change risk.
 
-If the agent runtime depends only on a stable tool/backend interface, then the project can progress independently.
+### End-to-end strict live API coverage should grow
 
-That is why the future real DB should be just one implementation of a backend contract.
+The test suite is broad, but the public API should have more DB-backed integration scenarios beyond mocked unit-style coverage.
 
----
+## 15. Working Rules for This Project
 
-# 14. Why observability comes after the graph works
+1. Keep business truth in tools and data services, not in prompts.
+2. Keep orchestration in the graph, not in route handlers.
+3. Keep contracts typed and explicit.
+4. Keep tools bounded and registry-driven.
+5. Prefer controlled failures over fake business data.
+6. Treat sync correctness as part of runtime trust, not just ETL success.
+7. Do not let documentation describe a system that no longer exists.
 
-LangSmith is very important.
+## 16. Short Version
 
-But it is only useful after the workflow actually exists.
+If everything starts feeling noisy, remember this:
 
-You trace:
-- model calls
-- tool calls
-- graph execution
-- failures
-- outputs
+SmartRest AI Agent is a FastAPI + LangGraph analytics service that verifies identity, resolves scope, plans a bounded analysis, executes approved SmartRest-backed tools, composes a grounded answer, and persists the run.
 
-If the graph is not built yet, observability has nothing meaningful to observe.
-
-So the right timing is:
-1. get the graph running
-2. then add LangSmith
-
----
-
-# 15. What is intentionally delayed
-
-The following things are intentionally delayed until the core runtime exists:
-
-- real SmartRest DB connection
-- semantic SQL
-- raw NL-to-SQL
-- inventory/fiscal complexity
-- approval flows
-- advanced memory
-- long multi-turn planning
-- production scaling concerns
-
-This is not because they are unimportant.
-
-It is because adding them too early would make the project chaotic.
-
----
-
-# 16. What “done enough for now” means
-
-The first major success state is:
-
-- FastAPI receives a question
-- LangGraph starts a run
-- scope is resolved
-- OpenAI interprets the request
-- the graph routes correctly
-- a report tool is called
-- the answer is composed
-- the run is persisted
-- later this is visible in LangSmith
-
-At that point, the project is no longer “a pile of code files.”
-
-It is a real agent runtime.
-
----
-
-# 17. What happens later when DB access arrives
-
-When the SmartRest database becomes available, we do **not** rebuild the project.
-
-We do this instead:
-
-1. inspect the real DB
-2. build a semantic/reporting backend
-3. implement real report runners or DB-backed tool implementations
-4. plug them into the existing tool layer
-5. validate real answers
-6. add observability and evaluation around them
-
-That is the payoff of the architecture.
-
-The runtime stays.
-The backend changes.
-
----
-
-# 18. The most important rules of the project
-
-## Rule 1
-Do not let the model answer business data questions without tools.
-
-## Rule 2
-Do not place orchestration logic in API routes.
-
-## Rule 3
-Do not skip explicit state.
-
-## Rule 4
-Do not skip LangGraph if the goal is a real agent.
-
-## Rule 5
-Do not use OpenAI as the source of truth for business data.
-
-## Rule 6
-Do not wait for the DB to build the runtime.
-
-## Rule 7
-Do not overbuild advanced features before the first graph works.
-
----
-
-# 19. The shortest explanation possible
-
-If everything becomes confusing, remember this:
-
-We are building:
-
-**a LangGraph-powered, OpenAI-interpreted, tool-using SmartRest reporting agent**
-
-where:
-- the graph controls the workflow
-- the model interprets and composes
-- the tools do the real work
-- the backend can be replaced later
-
-That is the whole logic.
-
----
-
-# 20. If you forget everything else, remember this order
-
-1. project skeleton
-2. state
-3. tools
-4. report contracts
-5. OpenAI interpretation
-6. LangGraph workflow
-7. persistence
-8. API boundary
-9. answer composition
-10. observability
-11. real DB later
-
-That is the correct build order.
+That is the real shape of the project today.

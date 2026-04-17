@@ -1046,6 +1046,91 @@ def _run_comparison_node(state: AgentState) -> dict[str, Any]:
     }
 
 
+def _run_total_node(state: AgentState) -> dict[str, Any]:
+    plan = state.analysis_plan
+    if plan is None or plan.retrieval is None:
+        return {
+            "status": RunStatus.FAILED,
+            "final_answer": "Total metric retrieval failed: missing retrieval context.",
+            "warnings": [*state.warnings, "total_missing_context"],
+        }
+
+    tool_registry = get_tool_registry()
+    retrieval_scope = _build_retrieval_scope(state)
+
+    request = TotalMetricRequest(
+        metric=plan.retrieval.metric,
+        date_from=plan.retrieval.date_from,
+        date_to=plan.retrieval.date_to,
+        scope=retrieval_scope,
+    )
+    started_at = perf_counter()
+    response = tool_registry.invoke(ToolId.FETCH_TOTAL_METRIC, request)
+    execution_trace = _append_tool_trace_step(
+        state.execution_trace,
+        step_id="tool.fetch_total_metric.current",
+        input_ref="analysis_plan.retrieval",
+        output_ref="total_metric.current",
+        started_at=started_at,
+        warnings=_stringify_tool_warnings(response.warnings),
+    )
+
+    base_metrics = dict(response.base_metrics)
+    if plan.scalar_calculations:
+        calc_request = ComputeMetricsRequest(
+            base_metrics=base_metrics,
+            calculations=plan.scalar_calculations,
+        )
+        calc_started_at = perf_counter()
+        calc_response = tool_registry.invoke(ToolId.COMPUTE_SCALAR_METRICS, calc_request)
+        execution_trace = _append_tool_trace_step(
+            execution_trace,
+            step_id="tool.compute_scalar_metrics.total",
+            input_ref="total_metric.base_metrics",
+            output_ref="total_metric.derived_metrics",
+            started_at=calc_started_at,
+        )
+        derived_metrics = calc_response.derived_metrics
+        calc_warnings = calc_response.warnings
+    else:
+        derived_metrics = []
+        calc_warnings = []
+
+    summary = (
+        f"Total for {plan.retrieval.metric.value} "
+        f"({plan.retrieval.date_from} to {plan.retrieval.date_to}): "
+        f"value={response.value:.2f}."
+    )
+    if derived_metrics:
+        derived_summary = ", ".join(
+            (
+                f"{metric.key}={metric.value:.2f}"
+                if metric.value is not None
+                else f"{metric.key}=n/a"
+            )
+            for metric in derived_metrics
+        )
+        summary = f"{summary} Derived metrics: {derived_summary}."
+
+    calc_warning_strings = [f"calc:{warning.value}" for warning in calc_warnings]
+    return {
+        "base_metrics": base_metrics,
+        "derived_metrics": derived_metrics,
+        "calc_warnings": calc_warnings,
+        "analysis_artifacts": {
+            **state.analysis_artifacts,
+            "kind": "total",
+            "summary": summary,
+        },
+        "warnings": _merge_warnings(
+            state.warnings,
+            _stringify_tool_warnings(response.warnings),
+            calc_warning_strings,
+        ),
+        "execution_trace": execution_trace,
+    }
+
+
 def _run_ranking_node(state: AgentState) -> dict[str, Any]:
     plan = state.analysis_plan
     if plan is None or plan.retrieval is None:
@@ -1386,14 +1471,20 @@ def _reject_node(state: AgentState) -> dict[str, Any]:
         )
     )
     supported_reports = (
-        "Աջակցվող հաշվետվություններն են՝ sales_total, order_count, "
-        "average_check, sales_by_source։"
+        "Աջակցվող անալիտիկան ներառում է sales_total, gross_sales_total, "
+        "order_count, average_check, quantity_sold, items_per_order, "
+        "discounted_order_count, discounted_order_share և sales_by_source։"
         if language == "hy"
         else (
-            "Поддерживаемые отчеты: sales_total, order_count, "
-            "average_check, sales_by_source."
+            "Поддерживаемая аналитика: sales_total, gross_sales_total, "
+            "order_count, average_check, quantity_sold, items_per_order, "
+            "discounted_order_count, discounted_order_share, sales_by_source."
             if language == "ru"
-            else "Supported reports: sales_total, order_count, average_check, sales_by_source."
+            else (
+                "Supported analytics include sales_total, gross_sales_total, "
+                "order_count, average_check, quantity_sold, items_per_order, "
+                "discounted_order_count, discounted_order_share, sales_by_source."
+            )
         )
     )
     fallback_answer = f"{reason} {supported_reports}"
@@ -1501,6 +1592,7 @@ def build_agent_graph() -> Any:
     graph.add_node("run_multi_report", _run_multi_report_node)
     graph.add_node("run_business_query", _run_business_query_node)
     graph.add_node("calc_metrics", _calc_metrics_node)
+    graph.add_node("run_total", _run_total_node)
     graph.add_node("run_comparison", _run_comparison_node)
     graph.add_node("run_ranking", _run_ranking_node)
     graph.add_node("run_trend", _run_trend_node)
@@ -1521,6 +1613,7 @@ def build_agent_graph() -> Any:
             PolicyRoute.PREPARE_LEGACY_REPORT.value: "prepare_legacy_report",
             PolicyRoute.RUN_MULTI_REPORT.value: "run_multi_report",
             PolicyRoute.RUN_BUSINESS_QUERY.value: "run_business_query",
+            PolicyRoute.RUN_TOTAL.value: "run_total",
             PolicyRoute.RUN_COMPARISON.value: "run_comparison",
             PolicyRoute.RUN_RANKING.value: "run_ranking",
             PolicyRoute.RUN_TREND.value: "run_trend",
@@ -1535,6 +1628,7 @@ def build_agent_graph() -> Any:
     graph.add_edge("run_multi_report", "compose_answer")
     graph.add_edge("run_business_query", "compose_answer")
     graph.add_edge("calc_metrics", "compose_answer")
+    graph.add_edge("run_total", "compose_answer")
     graph.add_edge("run_comparison", "compose_answer")
     graph.add_edge("run_ranking", "compose_answer")
     graph.add_edge("run_trend", "compose_answer")

@@ -64,6 +64,22 @@ def test_planner_resolves_registry_metric_alias_for_completed_orders() -> None:
     assert plan.retrieval.metric is MetricName.COMPLETED_ORDER_COUNT
 
 
+def test_planner_resolves_registry_metric_alias_for_quantity_sold() -> None:
+    plan = plan_analysis("Show quantity sold 2026-03-01 to 2026-03-07")
+
+    assert plan.intent is AnalysisIntent.METRIC_TOTAL
+    assert plan.retrieval is not None
+    assert plan.retrieval.metric is MetricName.QUANTITY_SOLD
+
+
+def test_planner_resolves_registry_metric_alias_for_gross_sales() -> None:
+    plan = plan_analysis("Show gross sales 2026-03-01 to 2026-03-07")
+
+    assert plan.intent is AnalysisIntent.METRIC_TOTAL
+    assert plan.retrieval is not None
+    assert plan.retrieval.metric is MetricName.GROSS_SALES_TOTAL
+
+
 def test_planner_detects_breakdown_dimension_from_registry_aliases() -> None:
     plan = plan_analysis("Show sales by branch 2026-03-01 to 2026-03-07")
 
@@ -71,6 +87,33 @@ def test_planner_detects_breakdown_dimension_from_registry_aliases() -> None:
     assert plan.retrieval is not None
     assert plan.retrieval.mode is RetrievalMode.BREAKDOWN
     assert plan.retrieval.dimension is DimensionName.BRANCH
+
+
+def test_planner_detects_payment_method_dimension_from_payment_type_alias() -> None:
+    plan = plan_analysis("Show sales by payment type 2026-03-01 to 2026-03-07")
+
+    assert plan.intent is AnalysisIntent.BREAKDOWN
+    assert plan.retrieval is not None
+    assert plan.retrieval.mode is RetrievalMode.BREAKDOWN
+    assert plan.retrieval.dimension is DimensionName.PAYMENT_METHOD
+
+
+def test_planner_detects_payment_method_dimension_from_cash_vs_card_phrase() -> None:
+    plan = plan_analysis("Show breakdown of sales by cash vs card 2026-03-01 to 2026-03-07")
+
+    assert plan.intent is AnalysisIntent.BREAKDOWN
+    assert plan.retrieval is not None
+    assert plan.retrieval.mode is RetrievalMode.BREAKDOWN
+    assert plan.retrieval.dimension is DimensionName.PAYMENT_METHOD
+
+
+def test_planner_detects_category_dimension_from_menu_group_alias() -> None:
+    plan = plan_analysis("Show sales by menu group 2026-03-01 to 2026-03-07")
+
+    assert plan.intent is AnalysisIntent.BREAKDOWN
+    assert plan.retrieval is not None
+    assert plan.retrieval.mode is RetrievalMode.BREAKDOWN
+    assert plan.retrieval.dimension is DimensionName.CATEGORY
 
 
 def test_planner_routes_item_query_to_business_tool_plan() -> None:
@@ -353,8 +396,13 @@ def _fake_live_analytics(monkeypatch: pytest.MonkeyPatch) -> None:
         def get_total_metric(self, request: TotalMetricRequest):
             values = {
                 MetricName.SALES_TOTAL: Decimal("700"),
+                MetricName.GROSS_SALES_TOTAL: Decimal("760"),
                 MetricName.ORDER_COUNT: Decimal("14"),
                 MetricName.AVERAGE_CHECK: Decimal("50"),
+                MetricName.QUANTITY_SOLD: Decimal("42"),
+                MetricName.DISCOUNTED_ORDER_COUNT: Decimal("5"),
+                MetricName.DISCOUNTED_ORDER_SHARE: Decimal("0.3571"),
+                MetricName.ITEMS_PER_ORDER: Decimal("3"),
             }
             return type(
                 "_Response",

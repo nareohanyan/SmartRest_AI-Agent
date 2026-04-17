@@ -232,8 +232,13 @@ class _FakeLiveAnalyticsService:
         previous = request.date_to < date(2026, 3, 10)
         value_map = {
             MetricName.SALES_TOTAL: 9000 if previous else 10000,
+            MetricName.GROSS_SALES_TOTAL: 9300 if previous else 10400,
             MetricName.ORDER_COUNT: 300 if previous else 345,
             MetricName.AVERAGE_CHECK: 30 if previous else 35,
+            MetricName.QUANTITY_SOLD: 950 if previous else 1100,
+            MetricName.DISCOUNTED_ORDER_COUNT: 30 if previous else 40,
+            MetricName.DISCOUNTED_ORDER_SHARE: 0.10 if previous else 0.12,
+            MetricName.ITEMS_PER_ORDER: 3.1 if previous else 3.2,
         }
         value = value_map.get(request.metric, 10000)
         return TotalMetricResponse(
@@ -385,6 +390,27 @@ def test_ru_comparison_routes_to_dynamic_comparison_path() -> None:
         "tool.compute_scalar_metrics.comparison",
     ]
     assert all(step.status.value == "success" for step in final_state.execution_trace)
+
+
+def test_new_total_metric_routes_to_dynamic_total_path() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state("Show quantity sold 2026-03-10 to 2026-03-16")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "plan_analysis",
+        "policy_gate",
+        "route_decision",
+        "run_total",
+        "compose_answer",
+    ]
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.policy_route is PolicyRoute.RUN_TOTAL
+    assert final_state.final_answer is not None
+    assert "quantity_sold" in final_state.final_answer
 
 
 def test_build_retrieval_scope_uses_requested_branch_ids_when_present() -> None:

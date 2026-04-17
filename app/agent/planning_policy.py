@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from app.agent.live_capabilities import evaluate_live_retrieval_capability
 from app.agent.planner_constraints import evaluate_planner_constraints
 from app.core.config import Settings
 from app.schemas.agent import PolicyRoute
@@ -365,32 +366,50 @@ def evaluate_plan_policy(
     if missing_dimension_ids:
         return _reject_missing_dimension(missing_dimension_ids[0])
 
+    live_capability = evaluate_live_retrieval_capability(
+        retrieval_mode=retrieval_mode,
+        retrieval_metric=retrieval_metric,
+        retrieval_dimension=retrieval_dimension,
+    )
+    if not live_capability.allowed:
+        return PolicyDecision(
+            route=PolicyRoute.REJECT,
+            reason_code=live_capability.reason_code,
+            reason_message=live_capability.reason_message,
+            allowed=False,
+        )
+
     if plan_intent is AnalysisIntent.METRIC_TOTAL:
         mapped_report_id = _map_retrieval_to_report(
             mode=retrieval_mode,
             metric=retrieval_metric,
             dimension=retrieval_dimension,
         )
-        if mapped_report_id is None:
+        if mapped_report_id is not None:
+            if mapped_report_id not in scope.allowed_report_ids:
+                return PolicyDecision(
+                    route=PolicyRoute.REJECT,
+                    reason_code="report_not_allowed",
+                    reason_message="Mapped report is not allowed for this scope.",
+                    allowed=False,
+                )
             return PolicyDecision(
-                route=PolicyRoute.REJECT,
-                reason_code="unsupported_metric",
-                reason_message="No supported report mapping for this metric/dimension.",
-                allowed=False,
+                route=PolicyRoute.PREPARE_LEGACY_REPORT,
+                reason_code="ok",
+                reason_message="Plan is allowed and mapped to legacy report execution.",
+                mapped_report_id=mapped_report_id,
+                normalized_filters=ReportFilters(date_from=date_from, date_to=date_to),
+                allowed=True,
             )
-        if mapped_report_id not in scope.allowed_report_ids:
-            return PolicyDecision(
-                route=PolicyRoute.REJECT,
-                reason_code="report_not_allowed",
-                reason_message="Mapped report is not allowed for this scope.",
-                allowed=False,
-            )
+
+        required_tools = list(planner_constraints.required_runtime_operations)
+        missing_tools = _missing_tool_permissions(required_tools=required_tools, scope=scope)
+        if missing_tools:
+            return _reject_missing_tool(missing_tools[0])
         return PolicyDecision(
-            route=PolicyRoute.PREPARE_LEGACY_REPORT,
+            route=PolicyRoute.RUN_TOTAL,
             reason_code="ok",
-            reason_message="Plan is allowed and mapped to legacy report execution.",
-            mapped_report_id=mapped_report_id,
-            normalized_filters=ReportFilters(date_from=date_from, date_to=date_to),
+            reason_message="Plan is allowed for dynamic total metric execution.",
             allowed=True,
         )
 

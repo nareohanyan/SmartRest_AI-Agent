@@ -89,6 +89,27 @@ def test_policy_maps_metric_total_to_legacy_report_route() -> None:
     assert decision.normalized_filters is not None
 
 
+def test_policy_routes_dynamic_total_metric_when_no_legacy_report_mapping_exists() -> None:
+    decision = evaluate_plan_policy(
+        plan_intent=AnalysisIntent.METRIC_TOTAL,
+        retrieval_mode=RetrievalMode.TOTAL,
+        retrieval_metric=MetricName.QUANTITY_SOLD,
+        retrieval_dimension=None,
+        date_from=date(2026, 3, 1),
+        date_to=date(2026, 3, 7),
+        scope=_granted_scope(
+            ReportType.SALES_TOTAL,
+            allowed_metrics=[MetricName.QUANTITY_SOLD],
+            allowed_tool_operations=[ToolOperation.FETCH_TOTAL_METRIC],
+        ),
+        settings=_settings(),
+    )
+
+    assert decision.route is PolicyRoute.RUN_TOTAL
+    assert decision.allowed is True
+    assert decision.reason_code == "ok"
+
+
 def test_policy_returns_safe_answer_for_unsupported_when_enabled() -> None:
     decision = evaluate_plan_policy(
         plan_intent=AnalysisIntent.UNSUPPORTED,
@@ -220,6 +241,50 @@ def test_policy_rejects_when_metric_id_permission_is_missing() -> None:
     assert decision.allowed is False
 
 
+def test_policy_rejects_unrefined_live_refund_metric_semantics() -> None:
+    decision = evaluate_plan_policy(
+        plan_intent=AnalysisIntent.COMPARISON,
+        retrieval_mode=RetrievalMode.TOTAL,
+        retrieval_metric=MetricName.REFUND_AMOUNT,
+        retrieval_dimension=None,
+        date_from=date(2026, 3, 1),
+        date_to=date(2026, 3, 7),
+        previous_period_metric=MetricName.REFUND_AMOUNT,
+        scope=_granted_scope(
+            ReportType.SALES_TOTAL,
+            allowed_metrics=[MetricName.REFUND_AMOUNT],
+            allowed_tool_operations=[ToolOperation.FETCH_TOTAL_METRIC],
+        ),
+        settings=_settings(),
+    )
+
+    assert decision.route is PolicyRoute.REJECT
+    assert decision.reason_code == "live_metric_semantics_unresolved"
+    assert decision.allowed is False
+
+
+def test_policy_rejects_category_breakdown_for_discount_share_until_supported() -> None:
+    decision = evaluate_plan_policy(
+        plan_intent=AnalysisIntent.BREAKDOWN,
+        retrieval_mode=RetrievalMode.BREAKDOWN,
+        retrieval_metric=MetricName.DISCOUNT_SHARE,
+        retrieval_dimension=DimensionName.CATEGORY,
+        date_from=date(2026, 3, 1),
+        date_to=date(2026, 3, 7),
+        scope=_granted_scope(
+            ReportType.SALES_TOTAL,
+            allowed_metrics=[MetricName.DISCOUNT_SHARE],
+            allowed_dimensions=[DimensionName.CATEGORY],
+            allowed_tool_operations=[ToolOperation.FETCH_BREAKDOWN],
+        ),
+        settings=_settings(),
+    )
+
+    assert decision.route is PolicyRoute.REJECT
+    assert decision.reason_code == "live_breakdown_metric_not_supported"
+    assert decision.allowed is False
+
+
 def test_policy_rejects_when_requested_branch_is_not_allowed() -> None:
     decision = evaluate_plan_policy(
         plan_intent=AnalysisIntent.METRIC_TOTAL,
@@ -325,4 +390,26 @@ def test_policy_rejects_trend_when_metric_permission_is_missing() -> None:
 
     assert decision.route is PolicyRoute.REJECT
     assert decision.reason_code == "metric_not_allowed"
+    assert decision.allowed is False
+
+
+def test_policy_rejects_non_day_live_timeseries_dimensions() -> None:
+    decision = evaluate_plan_policy(
+        plan_intent=AnalysisIntent.TREND,
+        retrieval_mode=RetrievalMode.TIMESERIES,
+        retrieval_metric=MetricName.SALES_TOTAL,
+        retrieval_dimension=DimensionName.SOURCE,
+        date_from=date(2026, 3, 1),
+        date_to=date(2026, 3, 7),
+        scope=_granted_scope(
+            ReportType.SALES_TOTAL,
+            allowed_metrics=[MetricName.SALES_TOTAL],
+            allowed_dimensions=[DimensionName.SOURCE],
+            allowed_tool_operations=[ToolOperation.FETCH_TIMESERIES],
+        ),
+        settings=_settings(),
+    )
+
+    assert decision.route is PolicyRoute.REJECT
+    assert decision.reason_code == "live_timeseries_dimension_not_supported"
     assert decision.allowed is False

@@ -4,12 +4,17 @@ from collections.abc import Callable, Iterator
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from functools import lru_cache
+from types import SimpleNamespace
 from typing import Any
 
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.agent.formula_ast import evaluate_formula_ast
+from app.agent.live_capabilities import (
+    LIVE_BASE_METRIC_IDS,
+    LIVE_SPECIALIZED_BREAKDOWN_METRIC_IDS,
+)
 from app.agent.metric_registry import MetricType, get_metric_registry
 from app.agent.services.smartrest_query_support import (
     apply_order_filters,
@@ -30,7 +35,15 @@ from app.schemas.analysis import (
     TotalMetricRequest,
     TotalMetricResponse,
 )
-from app.smartrest.models import Order, get_sync_session_factory
+from app.smartrest.models import (
+    Cashbox,
+    MenuGroup,
+    MenuItem,
+    Order,
+    OrderContent,
+    OrderPaymentHistory,
+    get_sync_session_factory,
+)
 
 _WEEKDAY_LABELS = {
     0: "sunday",
@@ -89,14 +102,24 @@ class LiveAnalyticsService:
         base_metric_ids = _required_base_metrics(request.metric)
 
         with self._session_factory() as session:
-            rows = self._aggregate_grouped_base_metrics(
-                session=session,
-                scope=scope,
-                date_from=request.date_from,
-                date_to=request.date_to,
-                metric_ids=base_metric_ids,
-                bucket_expression=bucket_expression,
-            )
+            if request.dimension in {DimensionName.PAYMENT_METHOD, DimensionName.CATEGORY}:
+                rows = self._aggregate_specialized_grouped_base_metrics(
+                    session=session,
+                    scope=scope,
+                    date_from=request.date_from,
+                    date_to=request.date_to,
+                    metric_ids=base_metric_ids,
+                    dimension=request.dimension,
+                )
+            else:
+                rows = self._aggregate_grouped_base_metrics(
+                    session=session,
+                    scope=scope,
+                    date_from=request.date_from,
+                    date_to=request.date_to,
+                    metric_ids=base_metric_ids,
+                    bucket_expression=bucket_expression,
+                )
 
         items: list[BreakdownItem] = []
         total_value = Decimal("0")
@@ -174,15 +197,14 @@ class LiveAnalyticsService:
         date_to: date,
         metric_ids: tuple[str, ...],
     ) -> dict[str, Decimal]:
-        statement = self._base_statement(
-            scope=scope,
-            date_from=date_from,
-            date_to=date_to,
-            metric_ids=metric_ids,
-        )
-        row = session.execute(statement).one()
         return {
-            metric_id: _decimal_value(getattr(row, metric_id))
+            metric_id: self._aggregate_metric_total(
+                session=session,
+                scope=scope,
+                date_from=date_from,
+                date_to=date_to,
+                metric_id=metric_id,
+            )
             for metric_id in metric_ids
         }
 
@@ -196,44 +218,102 @@ class LiveAnalyticsService:
         metric_ids: tuple[str, ...],
         bucket_expression: Any,
     ) -> list[Any]:
-        statement = self._base_statement(
-            scope=scope,
-            date_from=date_from,
-            date_to=date_to,
+        grouped_values_by_metric = {
+            metric_id: self._aggregate_metric_grouped(
+                session=session,
+                scope=scope,
+                date_from=date_from,
+                date_to=date_to,
+                metric_id=metric_id,
+                bucket_expression=bucket_expression,
+            )
+            for metric_id in metric_ids
+        }
+        return _merge_grouped_metric_values(
+            grouped_values_by_metric=grouped_values_by_metric,
             metric_ids=metric_ids,
-            bucket_expression=bucket_expression,
         )
-        return list(session.execute(statement))
 
-    def _base_statement(
+    def _aggregate_specialized_grouped_base_metrics(
         self,
         *,
+        session: Session,
         scope: RetrievalScope,
         date_from: date,
         date_to: date,
         metric_ids: tuple[str, ...],
-        bucket_expression: Any | None = None,
-    ):
-        metric_columns = [
-            _base_metric_expression(metric_id).label(metric_id)
+        dimension: DimensionName,
+    ) -> list[Any]:
+        grouped_values_by_metric = {
+            metric_id: self._aggregate_specialized_grouped_metric(
+                session=session,
+                scope=scope,
+                date_from=date_from,
+                date_to=date_to,
+                metric_id=metric_id,
+                dimension=dimension,
+            )
             for metric_id in metric_ids
-        ]
+        }
+        return _merge_grouped_metric_values(
+            grouped_values_by_metric=grouped_values_by_metric,
+            metric_ids=metric_ids,
+        )
 
-        if bucket_expression is None:
-            statement = select(*metric_columns)
-        else:
-            statement = select(bucket_expression.label("bucket"), *metric_columns).group_by(
-                bucket_expression
-            ).order_by(bucket_expression)
-
-        return apply_order_filters(
-            statement,
-            profile_id=scope.profile_id,
+    def _aggregate_metric_total(
+        self,
+        *,
+        session: Session,
+        scope: RetrievalScope,
+        date_from: date,
+        date_to: date,
+        metric_id: str,
+    ) -> Decimal:
+        statement = _metric_total_statement(
+            scope=scope,
             date_from=date_from,
             date_to=date_to,
-            branch_ids=scope.branch_ids,
-            source=scope.source,
+            metric_id=metric_id,
         )
+        return _decimal_value(session.execute(statement).scalar_one())
+
+    def _aggregate_metric_grouped(
+        self,
+        *,
+        session: Session,
+        scope: RetrievalScope,
+        date_from: date,
+        date_to: date,
+        metric_id: str,
+        bucket_expression: Any,
+    ) -> dict[Any, Decimal]:
+        statement = _metric_grouped_statement(
+            scope=scope,
+            date_from=date_from,
+            date_to=date_to,
+            metric_id=metric_id,
+            bucket_expression=bucket_expression,
+        )
+        return {row.bucket: _decimal_value(row.value) for row in session.execute(statement)}
+
+    def _aggregate_specialized_grouped_metric(
+        self,
+        *,
+        session: Session,
+        scope: RetrievalScope,
+        date_from: date,
+        date_to: date,
+        metric_id: str,
+        dimension: DimensionName,
+    ) -> dict[Any, Decimal]:
+        statement = _specialized_grouped_metric_statement(
+            scope=scope,
+            date_from=date_from,
+            date_to=date_to,
+            metric_id=metric_id,
+            dimension=dimension,
+        )
+        return {row.bucket: _decimal_value(row.value) for row in session.execute(statement)}
 
 
 def _require_scope(scope: RetrievalScope | None) -> RetrievalScope:
@@ -254,7 +334,7 @@ def _required_base_metrics(metric: MetricName) -> tuple[str, ...]:
         metric_ids = tuple(metric_definition.dependencies)
 
     unsupported_metrics = [
-        metric_id for metric_id in metric_ids if metric_id not in _SUPPORTED_BASE_METRICS
+        metric_id for metric_id in metric_ids if metric_id not in LIVE_BASE_METRIC_IDS
     ]
     if unsupported_metrics:
         joined = ", ".join(sorted(unsupported_metrics))
@@ -264,21 +344,16 @@ def _required_base_metrics(metric: MetricName) -> tuple[str, ...]:
     return metric_ids
 
 
-_SUPPORTED_BASE_METRICS = {
-    "sales_total",
-    "order_count",
-    "completed_order_count",
-    "discount_amount",
-    "delivery_order_count",
-    "dine_in_order_count",
-}
-
-
 def _base_metric_expression(metric_id: str):
     if metric_id == "sales_total":
         return sales_total_expression()
     if metric_id in {"order_count", "completed_order_count"}:
         return func.count(Order.id)
+    if metric_id == "discounted_order_count":
+        return func.coalesce(
+            func.sum(case((func.coalesce(Order.discounted_amount, 0) > 0, 1), else_=0)),
+            0,
+        )
     if metric_id == "discount_amount":
         return func.coalesce(func.sum(func.coalesce(Order.discounted_amount, 0)), 0)
     if metric_id == "delivery_order_count":
@@ -292,6 +367,71 @@ def _base_metric_expression(metric_id: str):
             0,
         )
     raise LiveAnalyticsUnsupportedError(f"Unsupported live base metric: {metric_id}")
+
+
+def _quantity_sold_expression() -> Any:
+    return func.coalesce(
+        func.sum(func.coalesce(OrderContent.profile_menu_item_count, 0)),
+        0,
+    )
+
+
+def _metric_total_statement(
+    *,
+    scope: RetrievalScope,
+    date_from: date,
+    date_to: date,
+    metric_id: str,
+):
+    if metric_id == "quantity_sold":
+        statement = (
+            select(_quantity_sold_expression().label("value"))
+            .select_from(Order)
+            .join(OrderContent, OrderContent.room_table_order_id == Order.id)
+        )
+    else:
+        statement = select(_base_metric_expression(metric_id).label("value")).select_from(Order)
+
+    return apply_order_filters(
+        statement,
+        profile_id=scope.profile_id,
+        date_from=date_from,
+        date_to=date_to,
+        branch_ids=scope.branch_ids,
+        source=scope.source,
+    )
+
+
+def _metric_grouped_statement(
+    *,
+    scope: RetrievalScope,
+    date_from: date,
+    date_to: date,
+    metric_id: str,
+    bucket_expression: Any,
+):
+    metric_expression = (
+        _quantity_sold_expression()
+        if metric_id == "quantity_sold"
+        else _base_metric_expression(metric_id)
+    )
+    statement = select(
+        bucket_expression.label("bucket"),
+        metric_expression.label("value"),
+    ).select_from(
+        Order,
+    )
+    if metric_id == "quantity_sold":
+        statement = statement.join(OrderContent, OrderContent.room_table_order_id == Order.id)
+    statement = statement.group_by(bucket_expression).order_by(bucket_expression)
+    return apply_order_filters(
+        statement,
+        profile_id=scope.profile_id,
+        date_from=date_from,
+        date_to=date_to,
+        branch_ids=scope.branch_ids,
+        source=scope.source,
+    )
 
 
 def _materialize_metric_value(metric: MetricName, base_metrics: dict[str, Decimal]) -> Decimal:
@@ -371,8 +511,39 @@ def _dimension_expression(
         return Order.branch_id, _normalize_branch_bucket
     if dimension is DimensionName.CASHIER:
         return Order.profile_staff_id, _normalize_cashier_bucket
+    if dimension is DimensionName.PAYMENT_METHOD:
+        return _payment_method_bucket_expression(), _normalize_payment_method_bucket
+    if dimension is DimensionName.CATEGORY:
+        return _category_bucket_expression(), _normalize_category_bucket
     raise LiveAnalyticsUnsupportedError(
         f"Live breakdown does not support dimension: {dimension.value}"
+    )
+
+
+def _payment_method_bucket_expression() -> Any:
+    normalized_name = func.lower(
+        func.trim(func.coalesce(Cashbox.cashbox_name_en, Cashbox.cashbox_name, ""))
+    )
+    return case(
+        (normalized_name.like("%idram%"), "idram"),
+        (
+            normalized_name.in_(("cash", "cache"))
+            | normalized_name.like("cash %")
+            | normalized_name.like("cache %"),
+            "cash",
+        ),
+        (Cashbox.is_bank.is_(True), "card"),
+        else_="other_payment_method",
+    )
+
+
+def _category_bucket_expression() -> Any:
+    return func.coalesce(
+        func.nullif(MenuGroup.title_en, ""),
+        func.nullif(MenuGroup.title_ru, ""),
+        func.nullif(MenuGroup.title, ""),
+        func.concat("category_", MenuGroup.id),
+        "unknown_category",
     )
 
 
@@ -404,6 +575,228 @@ def _normalize_cashier_bucket(value: Any) -> str:
     if value is None:
         return "cashier_unknown"
     return f"cashier_{int(value)}"
+
+
+def _normalize_payment_method_bucket(value: Any) -> str:
+    if value is None:
+        return "unknown_payment_method"
+    normalized = str(value).strip().lower().replace(" ", "_")
+    if normalized in {"cache", "cash"}:
+        return "cash"
+    if normalized == "idram":
+        return "idram"
+    if normalized in {"card", "bank"}:
+        return "card"
+    return normalized
+
+
+def _normalize_category_bucket(value: Any) -> str:
+    if value is None:
+        return "unknown_category"
+    normalized = str(value).strip()
+    return normalized or "unknown_category"
+
+
+def _specialized_grouped_metric_statement(
+    *,
+    scope: RetrievalScope,
+    date_from: date,
+    date_to: date,
+    metric_id: str,
+    dimension: DimensionName,
+):
+    if dimension is DimensionName.PAYMENT_METHOD:
+        return _payment_method_grouped_statement(
+            scope=scope,
+            date_from=date_from,
+            date_to=date_to,
+            metric_id=metric_id,
+        )
+    if dimension is DimensionName.CATEGORY:
+        return _category_grouped_statement(
+            scope=scope,
+            date_from=date_from,
+            date_to=date_to,
+            metric_id=metric_id,
+        )
+    raise LiveAnalyticsUnsupportedError(
+        f"Specialized grouped execution does not support dimension: {dimension.value}"
+    )
+
+
+def _payment_method_grouped_statement(
+    *,
+    scope: RetrievalScope,
+    date_from: date,
+    date_to: date,
+    metric_id: str,
+):
+    _validate_specialized_metric_support(
+        dimension=DimensionName.PAYMENT_METHOD,
+        metric_ids=(metric_id,),
+        supported_metric_ids=set(
+            LIVE_SPECIALIZED_BREAKDOWN_METRIC_IDS[DimensionName.PAYMENT_METHOD.value]
+        ),
+    )
+    bucket_expression = _payment_method_bucket_expression()
+    metric_expression: Any
+    if metric_id == "sales_total":
+        metric_expression = func.coalesce(
+            func.sum(func.coalesce(OrderPaymentHistory.payed, 0)),
+            0,
+        )
+    else:
+        metric_expression = func.count(func.distinct(OrderPaymentHistory.order_id))
+    statement = (
+        select(
+            bucket_expression.label("bucket"),
+            metric_expression.label("value"),
+        )
+        .select_from(Order)
+        .join(OrderPaymentHistory, OrderPaymentHistory.order_id == Order.id)
+        .outerjoin(Cashbox, Cashbox.id == OrderPaymentHistory.cashbox_id)
+        .group_by(bucket_expression)
+        .order_by(bucket_expression)
+    )
+    return apply_order_filters(
+        statement,
+        profile_id=scope.profile_id,
+        date_from=date_from,
+        date_to=date_to,
+        branch_ids=scope.branch_ids,
+        source=scope.source,
+    )
+
+
+def _category_grouped_statement(
+    *,
+    scope: RetrievalScope,
+    date_from: date,
+    date_to: date,
+    metric_id: str,
+):
+    _validate_specialized_metric_support(
+        dimension=DimensionName.CATEGORY,
+        metric_ids=(metric_id,),
+        supported_metric_ids=set(
+            LIVE_SPECIALIZED_BREAKDOWN_METRIC_IDS[DimensionName.CATEGORY.value]
+        ),
+    )
+    base_rows = _category_metric_rows_subquery(
+        scope=scope,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    metric_expression: Any
+    if metric_id == "sales_total":
+        metric_expression = func.coalesce(func.sum(base_rows.c.allocated_sales), 0)
+    elif metric_id == "quantity_sold":
+        metric_expression = func.coalesce(func.sum(base_rows.c.item_quantity), 0)
+    else:
+        metric_expression = func.count(func.distinct(base_rows.c.order_id))
+
+    return (
+        select(
+            base_rows.c.bucket,
+            metric_expression.label("value"),
+        )
+        .group_by(base_rows.c.bucket)
+        .order_by(base_rows.c.bucket)
+    )
+
+
+def _category_metric_rows_subquery(
+    *,
+    scope: RetrievalScope,
+    date_from: date,
+    date_to: date,
+):
+    item_gross = (
+        func.coalesce(OrderContent.item_price, 0)
+        * func.coalesce(OrderContent.profile_menu_item_count, 0)
+    )
+    item_quantity = func.coalesce(OrderContent.profile_menu_item_count, 0)
+    order_gross_total = func.sum(item_gross).over(partition_by=OrderContent.room_table_order_id)
+    order_sales_total = func.coalesce(func.nullif(Order.final_total, 0), Order.total_price, 0)
+    allocated_sales = case(
+        (order_gross_total == 0, 0),
+        else_=(order_sales_total * item_gross / order_gross_total),
+    )
+    bucket_expression = _category_bucket_expression()
+
+    base_rows = (
+        select(
+            bucket_expression.label("bucket"),
+            Order.id.label("order_id"),
+            allocated_sales.label("allocated_sales"),
+            item_quantity.label("item_quantity"),
+        )
+        .select_from(Order)
+        .join(OrderContent, OrderContent.room_table_order_id == Order.id)
+        .outerjoin(MenuItem, MenuItem.id == OrderContent.profile_menu_item_id)
+        .outerjoin(MenuGroup, MenuGroup.id == MenuItem.group_id)
+    )
+    base_rows = apply_order_filters(
+        base_rows,
+        profile_id=scope.profile_id,
+        date_from=date_from,
+        date_to=date_to,
+        branch_ids=scope.branch_ids,
+        source=scope.source,
+    ).subquery()
+
+
+def _validate_specialized_metric_support(
+    *,
+    dimension: DimensionName,
+    metric_ids: tuple[str, ...],
+    supported_metric_ids: set[str],
+) -> None:
+    unsupported = sorted(
+        metric_id for metric_id in metric_ids if metric_id not in supported_metric_ids
+    )
+    if unsupported:
+        raise LiveAnalyticsUnsupportedError(
+            "Live "
+            f"{dimension.value} breakdown does not support metric dependencies yet: "
+            f"{', '.join(unsupported)}"
+        )
+
+
+def _merge_grouped_metric_values(
+    *,
+    grouped_values_by_metric: dict[str, dict[Any, Decimal]],
+    metric_ids: tuple[str, ...],
+) -> list[Any]:
+    buckets = {
+        bucket
+        for grouped_values in grouped_values_by_metric.values()
+        for bucket in grouped_values
+    }
+    rows: list[Any] = []
+    for bucket in sorted(buckets, key=_bucket_sort_key):
+        payload: dict[str, Any] = {"bucket": bucket}
+        for metric_id in metric_ids:
+            payload[metric_id] = grouped_values_by_metric.get(metric_id, {}).get(
+                bucket,
+                Decimal("0"),
+            )
+        rows.append(SimpleNamespace(**payload))
+    return rows
+
+
+def _bucket_sort_key(value: Any) -> tuple[int, Any]:
+    if value is None:
+        return (4, "")
+    if isinstance(value, date):
+        return (0, value.isoformat())
+    if isinstance(value, datetime):
+        return (0, value.isoformat())
+    if isinstance(value, Decimal):
+        return (1, float(value))
+    if isinstance(value, int | float):
+        return (1, value)
+    return (2, str(value))
 
 
 def _coerce_bucket_date(value: Any) -> date:
