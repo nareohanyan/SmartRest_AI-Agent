@@ -80,6 +80,30 @@ def test_planner_resolves_registry_metric_alias_for_gross_sales() -> None:
     assert plan.retrieval.metric is MetricName.GROSS_SALES_TOTAL
 
 
+def test_planner_resolves_armenian_alias_for_gross_sales() -> None:
+    plan = plan_analysis("Ցույց տուր համախառն վաճառքը 2026-03-01 to 2026-03-07")
+
+    assert plan.intent is AnalysisIntent.METRIC_TOTAL
+    assert plan.retrieval is not None
+    assert plan.retrieval.metric is MetricName.GROSS_SALES_TOTAL
+
+
+def test_planner_resolves_armenian_alias_for_quantity_sold() -> None:
+    plan = plan_analysis("Ցույց տուր վաճառված քանակը 2026-03-01 to 2026-03-07")
+
+    assert plan.intent is AnalysisIntent.METRIC_TOTAL
+    assert plan.retrieval is not None
+    assert plan.retrieval.metric is MetricName.QUANTITY_SOLD
+
+
+def test_planner_resolves_armenian_alias_for_discounted_order_share() -> None:
+    plan = plan_analysis("Ցույց տուր զեղչված պատվերների բաժինը 2026-03-01 to 2026-03-07")
+
+    assert plan.intent is AnalysisIntent.METRIC_TOTAL
+    assert plan.retrieval is not None
+    assert plan.retrieval.metric is MetricName.DISCOUNTED_ORDER_SHARE
+
+
 def test_planner_detects_breakdown_dimension_from_registry_aliases() -> None:
     plan = plan_analysis("Show sales by branch 2026-03-01 to 2026-03-07")
 
@@ -109,6 +133,24 @@ def test_planner_detects_payment_method_dimension_from_cash_vs_card_phrase() -> 
 
 def test_planner_detects_category_dimension_from_menu_group_alias() -> None:
     plan = plan_analysis("Show sales by menu group 2026-03-01 to 2026-03-07")
+
+    assert plan.intent is AnalysisIntent.BREAKDOWN
+    assert plan.retrieval is not None
+    assert plan.retrieval.mode is RetrievalMode.BREAKDOWN
+    assert plan.retrieval.dimension is DimensionName.CATEGORY
+
+
+def test_planner_detects_armenian_payment_method_dimension() -> None:
+    plan = plan_analysis("Ցույց տուր վաճառքը ըստ վճարման եղանակի 2026-03-01 to 2026-03-07")
+
+    assert plan.intent is AnalysisIntent.BREAKDOWN
+    assert plan.retrieval is not None
+    assert plan.retrieval.mode is RetrievalMode.BREAKDOWN
+    assert plan.retrieval.dimension is DimensionName.PAYMENT_METHOD
+
+
+def test_planner_detects_armenian_category_dimension() -> None:
+    plan = plan_analysis("Ցույց տուր վաճառքը ըստ կատեգորիայի 2026-03-01 to 2026-03-07")
 
     assert plan.intent is AnalysisIntent.BREAKDOWN
     assert plan.retrieval is not None
