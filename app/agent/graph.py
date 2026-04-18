@@ -84,34 +84,74 @@ def _smalltalk_answer(language: str) -> str:
     return "Hello. Nice to see you here."
 
 
-def _item_metric_label(metric: ItemPerformanceMetric, language: str) -> str:
+def _item_metric_label(
+    metric: ItemPerformanceMetric,
+    language: str,
+    ranking_mode: RankingMode,
+) -> str:
     if metric is ItemPerformanceMetric.QUANTITY_SOLD:
         return (
-            "ամենավաճառված ապրանքները"
+            (
+                "ամենավաճառված ապրանքները"
+                if ranking_mode is RankingMode.TOP_K
+                else "ամենաքիչ վաճառված ապրանքները"
+            )
             if language == "hy"
             else (
-                "самые продаваемые товары"
+                (
+                    "самые продаваемые товары"
+                    if ranking_mode is RankingMode.TOP_K
+                    else "наименее продаваемые товары"
+                )
                 if language == "ru"
-                else "top selling items"
+                else (
+                    "top selling items"
+                    if ranking_mode is RankingMode.TOP_K
+                    else "least selling items"
+                )
             )
         )
     if metric is ItemPerformanceMetric.DISTINCT_ORDERS:
         return (
-            "ամենաշատ պատվիրված ապրանքները"
+            (
+                "ամենաշատ պատվիրված ապրանքները"
+                if ranking_mode is RankingMode.TOP_K
+                else "ամենաքիչ պատվիրված ապրանքները"
+            )
             if language == "hy"
             else (
-                "самые часто заказываемые товары"
+                (
+                    "самые часто заказываемые товары"
+                    if ranking_mode is RankingMode.TOP_K
+                    else "наименее заказываемые товары"
+                )
                 if language == "ru"
-                else "most frequently ordered items"
+                else (
+                    "most frequently ordered items"
+                    if ranking_mode is RankingMode.TOP_K
+                    else "least frequently ordered items"
+                )
             )
         )
     return (
-        "ամենաեկամտաբեր ապրանքները"
+        (
+            "ամենաեկամտաբեր ապրանքները"
+            if ranking_mode is RankingMode.TOP_K
+            else "ամենաքիչ եկամուտ բերած ապրանքները"
+        )
         if language == "hy"
         else (
-            "самые доходные товары"
+            (
+                "самые доходные товары"
+                if ranking_mode is RankingMode.TOP_K
+                else "товары с наименьшей выручкой"
+            )
             if language == "ru"
-            else "highest revenue items"
+            else (
+                "highest revenue items"
+                if ranking_mode is RankingMode.TOP_K
+                else "lowest revenue items"
+            )
         )
     )
 
@@ -136,28 +176,43 @@ def _format_item_value(
     return f"{value:.2f}{suffix}"
 
 
+def _format_period_label(*, date_from: object, date_to: object, language: str) -> str:
+    if date_from is not None and date_to is not None:
+        if language == "hy":
+            return f"{date_from}-ից մինչև {date_to}"
+        if language == "ru":
+            return f"с {date_from} по {date_to}"
+        return f"from {date_from} to {date_to}"
+
+    if language == "hy":
+        return "ամբողջ հասանելի պատմության ընթացքում"
+    if language == "ru":
+        return "за всю доступную историю"
+    return "across the full available history"
+
+
 def _build_item_performance_summary(
     *,
     business_query: BusinessQuerySpec,
     response: ItemPerformanceResponse,
     language: str,
 ) -> str:
+    period_label = _format_period_label(
+        date_from=business_query.date_from,
+        date_to=business_query.date_to,
+        language=language,
+    )
     if not response.items:
         return (
-            (
-                f"{business_query.date_from}-ից մինչև "
-                f"{business_query.date_to} տվյալներով ապրանքներ չեն գտնվել։"
-            )
+            f"{period_label} տվյալներով ապրանքներ չեն գտնվել։"
             if language == "hy"
             else (
                 (
-                    f"За период с {business_query.date_from} по "
-                    f"{business_query.date_to} товары не найдены."
+                    f"Товары не найдены {period_label}."
                 )
                 if language == "ru"
                 else (
-                    f"No items were found from {business_query.date_from} "
-                    f"to {business_query.date_to}."
+                    f"No items were found {period_label}."
                 )
             )
         )
@@ -171,21 +226,17 @@ def _build_item_performance_summary(
             else "top" if business_query.ranking_mode is RankingMode.TOP_K else "bottom"
         )
     )
-    metric_label = _item_metric_label(response.metric, language)
+    metric_label = _item_metric_label(response.metric, language, business_query.ranking_mode)
     if language == "hy":
-        header = (
-            f"Ահա {business_query.date_from}-ից մինչև {business_query.date_to} "
-            f"{ranking_label} {len(response.items)} {metric_label}։"
-        )
+        header = f"Ահա {period_label} {ranking_label} {len(response.items)} {metric_label}։"
     elif language == "ru":
         header = (
-            f"Вот {ranking_label} {len(response.items)} {metric_label} "
-            f"за период с {business_query.date_from} по {business_query.date_to}."
+            f"Вот {ranking_label} {len(response.items)} {metric_label} {period_label}."
         )
     else:
         header = (
             f"Here are the {ranking_label} {len(response.items)} {metric_label} "
-            f"from {business_query.date_from} to {business_query.date_to}."
+            f"{period_label}."
         )
 
     lines = [
@@ -1096,9 +1147,14 @@ def _run_total_node(state: AgentState) -> dict[str, Any]:
         derived_metrics = []
         calc_warnings = []
 
+    period_label = _format_period_label(
+        date_from=plan.retrieval.date_from,
+        date_to=plan.retrieval.date_to,
+        language="en",
+    )
     summary = (
         f"Total for {plan.retrieval.metric.value} "
-        f"({plan.retrieval.date_from} to {plan.retrieval.date_to}): "
+        f"({period_label}): "
         f"value={response.value:.2f}."
     )
     if derived_metrics:
@@ -1198,9 +1254,14 @@ def _run_ranking_node(state: AgentState) -> dict[str, Any]:
 
     summary_items = ", ".join(f"{item.label}={item.value:.2f}" for item in ranked_items)
     summary_prefix = "Ranking" if plan.intent is AnalysisIntent.RANKING else "Breakdown"
+    period_label = _format_period_label(
+        date_from=plan.retrieval.date_from,
+        date_to=plan.retrieval.date_to,
+        language="en",
+    )
     summary = (
         f"{summary_prefix} for {plan.retrieval.metric.value} by {requested_dimension.value} "
-        f"({plan.retrieval.date_from} to {plan.retrieval.date_to}): {summary_items}."
+        f"({period_label}): {summary_items}."
     )
 
     return {
@@ -1244,12 +1305,12 @@ def _run_trend_node(state: AgentState) -> dict[str, Any]:
         warnings=_stringify_tool_warnings(timeseries.warnings),
     )
 
-    summary_parts = [
-        (
-            f"Trend for {plan.retrieval.metric.value} "
-            f"({plan.retrieval.date_from} to {plan.retrieval.date_to})."
-        )
-    ]
+    period_label = _format_period_label(
+        date_from=plan.retrieval.date_from,
+        date_to=plan.retrieval.date_to,
+        language="en",
+    )
+    summary_parts = [f"Trend for {plan.retrieval.metric.value} ({period_label})."]
 
     if plan.include_moving_average and len(timeseries.points) >= plan.moving_average_window:
         moving_average_request = MovingAverageRequest(
@@ -1375,8 +1436,13 @@ def _run_business_query_node(state: AgentState) -> dict[str, Any]:
             output_ref="customer_summary_response",
             started_at=started_at,
         )
+        period_label = _format_period_label(
+            date_from=business_query.date_from,
+            date_to=business_query.date_to,
+            language="en",
+        )
         summary = (
-            f"Customer summary for {business_query.date_from} to {business_query.date_to}: "
+            f"Customer summary {period_label}: "
             f"unique_clients={response.unique_clients}, "
             f"identified_order_count={response.identified_order_count}, "
             f"total_order_count={response.total_order_count}, "
@@ -1410,8 +1476,13 @@ def _run_business_query_node(state: AgentState) -> dict[str, Any]:
     status_summary = ", ".join(
         f"{status}={count}" for status, count in sorted(response.status_counts.items())
     ) or "no receipt statuses found"
+    period_label = _format_period_label(
+        date_from=business_query.date_from,
+        date_to=business_query.date_to,
+        language="en",
+    )
     summary = (
-        f"Receipt summary for {business_query.date_from} to {business_query.date_to}: "
+        f"Receipt summary {period_label}: "
         f"receipt_count={response.receipt_count}, "
         f"linked_order_count={response.linked_order_count}, "
         f"statuses: {status_summary}."

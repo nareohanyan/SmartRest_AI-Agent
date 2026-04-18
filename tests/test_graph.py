@@ -28,6 +28,7 @@ from app.schemas.analysis import (
     ItemPerformanceMetric,
     ItemPerformanceResponse,
     MetricName,
+    RankingMode,
     TimeseriesPoint,
     TimeseriesResponse,
     TotalMetricResponse,
@@ -229,7 +230,7 @@ def _fake_run_smartrest_report(request: Any, *, profile_id: int) -> RunReportRes
 
 class _FakeLiveAnalyticsService:
     def get_total_metric(self, request: Any) -> TotalMetricResponse:
-        previous = request.date_to < date(2026, 3, 10)
+        previous = request.date_to is not None and request.date_to < date(2026, 3, 10)
         value_map = {
             MetricName.SALES_TOTAL: 9000 if previous else 10000,
             MetricName.GROSS_SALES_TOTAL: 9300 if previous else 10400,
@@ -246,11 +247,18 @@ class _FakeLiveAnalyticsService:
             date_from=request.date_from,
             date_to=request.date_to,
             value=value,
-            base_metrics={
-                "sales_total": 10000,
-                "order_count": 345,
-                "day_count": 7,
-            },
+            base_metrics=(
+                {
+                    "sales_total": 10000,
+                    "order_count": 345,
+                    "day_count": 7,
+                }
+                if request.date_from is not None and request.date_to is not None
+                else {
+                    "sales_total": 10000,
+                    "order_count": 345,
+                }
+            ),
             warnings=[],
         )
 
@@ -529,6 +537,43 @@ def test_armenian_top_selling_items_answer_is_ranked_quantity_list(
     assert "դրամ" not in final_state.final_answer
 
 
+def test_armenian_least_sold_item_query_routes_to_bottom_quantity_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_registry = graph_module.get_tool_registry()
+
+    class _BusinessRegistry:
+        def invoke(self, tool_id: ToolId | str, request: Any) -> Any:
+            normalized = ToolId(tool_id)
+            if normalized is ToolId.FETCH_ITEM_PERFORMANCE:
+                assert request.ranking_mode is RankingMode.BOTTOM_K
+                return ItemPerformanceResponse(
+                    metric=ItemPerformanceMetric.QUANTITY_SOLD,
+                    date_from=request.date_from,
+                    date_to=request.date_to,
+                    ranking_mode=request.ranking_mode,
+                    items=[
+                        ItemPerformanceItem(menu_item_id=3, name="Խինկալի", value=12),
+                    ],
+                    warnings=[],
+                )
+            return base_registry.invoke(normalized, request)
+
+    monkeypatch.setattr(graph_module, "get_tool_registry", lambda: _BusinessRegistry())
+    graph = build_agent_graph()
+    payload = _initial_state("Վերջին մեկ տարվա ամենքիչ վաճառք ունեցող ապրանքը։")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.policy_route is PolicyRoute.RUN_BUSINESS_QUERY
+    assert final_state.final_answer is not None
+    assert "ամենաքիչ վաճառված" in final_state.final_answer
+    assert "ամենավաճառված" not in final_state.final_answer
+    assert "1. Խինկալի — 12 հատ" in final_state.final_answer
+    assert "դրամ" not in final_state.final_answer
+
+
 def test_compound_request_returns_partial_success_for_unsupported_task() -> None:
     graph = build_agent_graph()
     payload = _initial_state(
@@ -554,16 +599,47 @@ def test_compound_request_returns_partial_success_for_unsupported_task() -> None
     assert "I couldn't answer" in (final_state.final_answer or "")
 
 
-def test_missing_date_routes_to_clarify() -> None:
+def test_missing_date_total_defaults_to_overall_dynamic_total() -> None:
     graph = build_agent_graph()
     payload = _initial_state("What were total sales?")
 
     final_state = AgentState.model_validate(graph.invoke(payload))
     order = _node_order(graph, payload)
 
-    assert order == ["resolve_scope", "plan_analysis", "policy_gate", "route_decision", "clarify"]
-    assert final_state.status is RunStatus.CLARIFY
-    assert final_state.needs_clarification is True
+    assert order == [
+        "resolve_scope",
+        "plan_analysis",
+        "policy_gate",
+        "route_decision",
+        "run_total",
+        "compose_answer",
+    ]
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.policy_route is PolicyRoute.RUN_TOTAL
+    assert final_state.final_answer is not None
+    assert "None" not in final_state.final_answer
+
+
+def test_missing_date_item_revenue_defaults_to_overall_business_query() -> None:
+    graph = build_agent_graph()
+    payload = _initial_state("որն ա իմ ամենաեկամտաբեր ապրանքը")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+    order = _node_order(graph, payload)
+
+    assert order == [
+        "resolve_scope",
+        "plan_analysis",
+        "policy_gate",
+        "route_decision",
+        "run_business_query",
+        "compose_answer",
+    ]
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.policy_route is PolicyRoute.RUN_BUSINESS_QUERY
+    assert final_state.final_answer is not None
+    assert "Lahmajo" in final_state.final_answer
+    assert "None" not in final_state.final_answer
 
 
 def test_unsupported_request_routes_to_safe_answer() -> None:
@@ -719,11 +795,12 @@ def test_mixed_greeting_with_business_text_is_not_smalltalk() -> None:
         "plan_analysis",
         "policy_gate",
         "route_decision",
-        "safe_answer",
+        "run_business_query",
+        "compose_answer",
     ]
-    assert final_state.status is RunStatus.REJECTED
+    assert final_state.status is RunStatus.COMPLETED
     assert final_state.policy_route is not None
-    assert final_state.policy_route.value == "safe_answer"
+    assert final_state.policy_route.value == "run_business_query"
 
 
 def test_greeting_with_business_terms_is_not_smalltalk() -> None:
@@ -757,11 +834,12 @@ def test_high_priority_business_trigger_blocks_smalltalk() -> None:
         "plan_analysis",
         "policy_gate",
         "route_decision",
-        "clarify",
+        "run_total",
+        "compose_answer",
     ]
-    assert final_state.status is RunStatus.CLARIFY
+    assert final_state.status is RunStatus.COMPLETED
     assert final_state.policy_route is not None
-    assert final_state.policy_route.value == "clarify"
+    assert final_state.policy_route.value == "run_total"
 
 
 def test_scope_denied_blocks_execution() -> None:

@@ -170,15 +170,23 @@ class LiveAnalyticsService:
                 _materialize_metric_value(request.metric, row_base_metrics)
             )
 
-        zero_base_metrics = {metric_id: Decimal("0") for metric_id in base_metric_ids}
-        zero_value = quantize_decimal(_materialize_metric_value(request.metric, zero_base_metrics))
-        points = [
-            TimeseriesPoint(
-                bucket=day,
-                value=points_by_day.get(day, zero_value),
+        if request.date_from is not None and request.date_to is not None:
+            zero_base_metrics = {metric_id: Decimal("0") for metric_id in base_metric_ids}
+            zero_value = quantize_decimal(
+                _materialize_metric_value(request.metric, zero_base_metrics)
             )
-            for day in _daterange(request.date_from, request.date_to)
-        ]
+            points = [
+                TimeseriesPoint(
+                    bucket=day,
+                    value=points_by_day.get(day, zero_value),
+                )
+                for day in _daterange(request.date_from, request.date_to)
+            ]
+        else:
+            points = [
+                TimeseriesPoint(bucket=day, value=value)
+                for day, value in sorted(points_by_day.items())
+            ]
         return TimeseriesResponse(
             metric=request.metric,
             dimension=request.dimension,
@@ -193,8 +201,8 @@ class LiveAnalyticsService:
         *,
         session: Session,
         scope: RetrievalScope,
-        date_from: date,
-        date_to: date,
+        date_from: date | None,
+        date_to: date | None,
         metric_ids: tuple[str, ...],
     ) -> dict[str, Decimal]:
         return {
@@ -213,8 +221,8 @@ class LiveAnalyticsService:
         *,
         session: Session,
         scope: RetrievalScope,
-        date_from: date,
-        date_to: date,
+        date_from: date | None,
+        date_to: date | None,
         metric_ids: tuple[str, ...],
         bucket_expression: Any,
     ) -> list[Any]:
@@ -239,8 +247,8 @@ class LiveAnalyticsService:
         *,
         session: Session,
         scope: RetrievalScope,
-        date_from: date,
-        date_to: date,
+        date_from: date | None,
+        date_to: date | None,
         metric_ids: tuple[str, ...],
         dimension: DimensionName,
     ) -> list[Any]:
@@ -265,8 +273,8 @@ class LiveAnalyticsService:
         *,
         session: Session,
         scope: RetrievalScope,
-        date_from: date,
-        date_to: date,
+        date_from: date | None,
+        date_to: date | None,
         metric_id: str,
     ) -> Decimal:
         statement = _metric_total_statement(
@@ -282,8 +290,8 @@ class LiveAnalyticsService:
         *,
         session: Session,
         scope: RetrievalScope,
-        date_from: date,
-        date_to: date,
+        date_from: date | None,
+        date_to: date | None,
         metric_id: str,
         bucket_expression: Any,
     ) -> dict[Any, Decimal]:
@@ -301,8 +309,8 @@ class LiveAnalyticsService:
         *,
         session: Session,
         scope: RetrievalScope,
-        date_from: date,
-        date_to: date,
+        date_from: date | None,
+        date_to: date | None,
         metric_id: str,
         dimension: DimensionName,
     ) -> dict[Any, Decimal]:
@@ -379,8 +387,8 @@ def _quantity_sold_expression() -> Any:
 def _metric_total_statement(
     *,
     scope: RetrievalScope,
-    date_from: date,
-    date_to: date,
+    date_from: date | None,
+    date_to: date | None,
     metric_id: str,
 ):
     if metric_id == "quantity_sold":
@@ -405,8 +413,8 @@ def _metric_total_statement(
 def _metric_grouped_statement(
     *,
     scope: RetrievalScope,
-    date_from: date,
-    date_to: date,
+    date_from: date | None,
+    date_to: date | None,
     metric_id: str,
     bucket_expression: Any,
 ):
@@ -470,14 +478,15 @@ def _build_total_base_metrics_payload(
     *,
     metric: MetricName,
     base_metrics: dict[str, Decimal],
-    date_from: date,
-    date_to: date,
+    date_from: date | None,
+    date_to: date | None,
     metric_value: Decimal,
 ) -> dict[str, Decimal]:
     payload = {
         metric.value: quantize_decimal(metric_value),
-        "day_count": Decimal((date_to - date_from).days + 1),
     }
+    if date_from is not None and date_to is not None:
+        payload["day_count"] = Decimal((date_to - date_from).days + 1)
     metric_definition = get_metric_registry().get(metric.value)
     if metric_definition is not None:
         for dependency in metric_definition.dependencies:
@@ -600,8 +609,8 @@ def _normalize_category_bucket(value: Any) -> str:
 def _specialized_grouped_metric_statement(
     *,
     scope: RetrievalScope,
-    date_from: date,
-    date_to: date,
+    date_from: date | None,
+    date_to: date | None,
     metric_id: str,
     dimension: DimensionName,
 ):
@@ -627,8 +636,8 @@ def _specialized_grouped_metric_statement(
 def _payment_method_grouped_statement(
     *,
     scope: RetrievalScope,
-    date_from: date,
-    date_to: date,
+    date_from: date | None,
+    date_to: date | None,
     metric_id: str,
 ):
     _validate_specialized_metric_support(
@@ -671,8 +680,8 @@ def _payment_method_grouped_statement(
 def _category_grouped_statement(
     *,
     scope: RetrievalScope,
-    date_from: date,
-    date_to: date,
+    date_from: date | None,
+    date_to: date | None,
     metric_id: str,
 ):
     _validate_specialized_metric_support(
@@ -708,8 +717,8 @@ def _category_grouped_statement(
 def _category_metric_rows_subquery(
     *,
     scope: RetrievalScope,
-    date_from: date,
-    date_to: date,
+    date_from: date | None,
+    date_to: date | None,
 ):
     item_gross = (
         func.coalesce(OrderContent.item_price, 0)
@@ -744,6 +753,7 @@ def _category_metric_rows_subquery(
         branch_ids=scope.branch_ids,
         source=scope.source,
     ).subquery()
+    return base_rows
 
 
 def _validate_specialized_metric_support(

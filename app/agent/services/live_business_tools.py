@@ -150,9 +150,15 @@ class LiveBusinessToolsService:
                 )
                 .outerjoin(Order, Order.id == FiscalReceipt.order_id)
                 .where(FiscalReceipt.profile_id == scope.profile_id)
-                .where(func.date(FiscalReceipt.created_at) >= request.date_from)
-                .where(func.date(FiscalReceipt.created_at) <= request.date_to)
             )
+            if request.date_from is not None:
+                summary_statement = summary_statement.where(
+                    func.date(FiscalReceipt.created_at) >= request.date_from
+                )
+            if request.date_to is not None:
+                summary_statement = summary_statement.where(
+                    func.date(FiscalReceipt.created_at) <= request.date_to
+                )
             if scope.branch_ids:
                 summary_statement = summary_statement.where(Order.branch_id.in_(scope.branch_ids))
             source_clause = source_filter_clause(scope.source)
@@ -167,9 +173,15 @@ class LiveBusinessToolsService:
                 )
                 .outerjoin(Order, Order.id == FiscalReceipt.order_id)
                 .where(FiscalReceipt.profile_id == scope.profile_id)
-                .where(func.date(FiscalReceipt.created_at) >= request.date_from)
-                .where(func.date(FiscalReceipt.created_at) <= request.date_to)
             )
+            if request.date_from is not None:
+                status_statement = status_statement.where(
+                    func.date(FiscalReceipt.created_at) >= request.date_from
+                )
+            if request.date_to is not None:
+                status_statement = status_statement.where(
+                    func.date(FiscalReceipt.created_at) <= request.date_to
+                )
             if scope.branch_ids:
                 status_statement = status_statement.where(Order.branch_id.in_(scope.branch_ids))
             source_clause = source_filter_clause(scope.source)

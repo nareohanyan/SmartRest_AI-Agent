@@ -531,18 +531,17 @@ def _parse_question(question: str) -> ParsedQuestion:
     )
     dimension = _detect_dimension(question)
     business_query: ParsedBusinessQuery | None = None
-    if parsed_date_range is not None:
-        if _is_item_business_query(question):
-            inferred_ranking_mode = ranking_mode or RankingMode.TOP_K
-            business_query = ParsedBusinessQuery(
-                kind=BusinessQueryKind.ITEM_PERFORMANCE,
-                item_metric=_detect_item_metric(question),
-                item_query=_extract_item_query(question),
-            )
-        elif _is_customer_business_query(question):
-            business_query = ParsedBusinessQuery(kind=BusinessQueryKind.CUSTOMER_SUMMARY)
-        elif _is_receipt_business_query(question):
-            business_query = ParsedBusinessQuery(kind=BusinessQueryKind.RECEIPT_SUMMARY)
+    if _is_item_business_query(question):
+        inferred_ranking_mode = ranking_mode or RankingMode.TOP_K
+        business_query = ParsedBusinessQuery(
+            kind=BusinessQueryKind.ITEM_PERFORMANCE,
+            item_metric=_detect_item_metric(question),
+            item_query=_extract_item_query(question),
+        )
+    elif _is_customer_business_query(question):
+        business_query = ParsedBusinessQuery(kind=BusinessQueryKind.CUSTOMER_SUMMARY)
+    elif _is_receipt_business_query(question):
+        business_query = ParsedBusinessQuery(kind=BusinessQueryKind.RECEIPT_SUMMARY)
 
     return ParsedQuestion(
         normalized_question=normalized,
@@ -573,11 +572,11 @@ def _parse_question(question: str) -> ParsedQuestion:
 
 
 def _build_business_plan(parsed: ParsedQuestion) -> AnalysisPlan | None:
-    if parsed.date_range is None or parsed.business_query is None:
+    if parsed.business_query is None:
         return None
 
-    date_from = parsed.date_range.date_from
-    date_to = parsed.date_range.date_to
+    date_from = parsed.date_range.date_from if parsed.date_range is not None else None
+    date_to = parsed.date_range.date_to if parsed.date_range is not None else None
 
     if parsed.business_query.kind is BusinessQueryKind.ITEM_PERFORMANCE:
         item_metric = parsed.business_query.item_metric
@@ -659,10 +658,8 @@ def plan_analysis(question: str) -> AnalysisPlan:
             reasoning_notes=policy.reasoning_notes,
         )
 
-    if parsed.date_range is None:
-        raise PlanningError("Policy proceed requires a parsed date range.")
-
-    date_from, date_to = parsed.date_range.date_from, parsed.date_range.date_to
+    date_from = parsed.date_range.date_from if parsed.date_range is not None else None
+    date_to = parsed.date_range.date_to if parsed.date_range is not None else None
     business_plan = _build_business_plan(parsed)
     if business_plan is not None:
         return business_plan
@@ -719,6 +716,13 @@ def plan_analysis(question: str) -> AnalysisPlan:
         )
 
     if parsed.wants_comparison:
+        if date_from is None or date_to is None:
+            return AnalysisPlan(
+                intent=AnalysisIntent.CLARIFY,
+                needs_clarification=True,
+                clarification_question=decide_policy(parsed).clarification_question,
+                reasoning_notes="Comparison requests require an explicit date range.",
+            )
         previous_start, previous_end = _build_previous_period(date_from, date_to)
         metric_key = metric.value
         calculations: list[CalculationSpec] = [

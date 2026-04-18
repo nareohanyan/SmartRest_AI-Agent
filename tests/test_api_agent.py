@@ -233,15 +233,15 @@ async def test_supported_request_returns_completed_contract(api_client: AsyncCli
     assert payload["clarification_question"] is None
 
 
-async def test_missing_date_returns_clarify_response(api_client: AsyncClient) -> None:
+async def test_missing_date_defaults_to_overall_response(api_client: AsyncClient) -> None:
     response = await api_client.post("/agent/run", json=_request_payload("What were total sales?"))
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "clarify"
-    assert payload["needs_clarification"] is True
-    assert payload["clarification_question"]
-    assert "date range" in payload["clarification_question"].lower()
+    assert payload["status"] == "completed"
+    assert payload["needs_clarification"] is False
+    assert payload["clarification_question"] is None
+    assert payload["selected_report_id"] is None
 
 
 async def test_smalltalk_returns_onboarding_contract(api_client: AsyncClient) -> None:
@@ -403,7 +403,7 @@ def _fake_run_smartrest_report(request: Any, *, profile_id: int) -> RunReportRes
 
 class _FakeLiveAnalyticsService:
     def get_total_metric(self, request: Any) -> TotalMetricResponse:
-        previous = request.date_to < date(2026, 3, 10)
+        previous = request.date_to is not None and request.date_to < date(2026, 3, 10)
         value_map = {
             MetricName.SALES_TOTAL: Decimal("9000") if previous else Decimal("10000"),
             MetricName.ORDER_COUNT: Decimal("300") if previous else Decimal("345"),
@@ -414,11 +414,18 @@ class _FakeLiveAnalyticsService:
             date_from=request.date_from,
             date_to=request.date_to,
             value=value_map.get(request.metric, Decimal("10000")),
-            base_metrics={
-                "sales_total": Decimal("10000"),
-                "order_count": Decimal("345"),
-                "day_count": Decimal("7"),
-            },
+            base_metrics=(
+                {
+                    "sales_total": Decimal("10000"),
+                    "order_count": Decimal("345"),
+                    "day_count": Decimal("7"),
+                }
+                if request.date_from is not None and request.date_to is not None
+                else {
+                    "sales_total": Decimal("10000"),
+                    "order_count": Decimal("345"),
+                }
+            ),
             warnings=[],
         )
 

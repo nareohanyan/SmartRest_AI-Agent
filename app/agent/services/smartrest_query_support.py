@@ -56,14 +56,16 @@ def apply_order_filters(
     statement: Any,
     *,
     profile_id: int,
-    date_from: date,
-    date_to: date,
+    date_from: date | None,
+    date_to: date | None,
     branch_ids: list[int] | None = None,
     source: str | None = None,
 ) -> Any:
     statement = statement.where(Order.profile_id == profile_id)
-    statement = statement.where(func.date(Order.order_create_date) >= date_from)
-    statement = statement.where(func.date(Order.order_create_date) <= date_to)
+    if date_from is not None:
+        statement = statement.where(func.date(Order.order_create_date) >= date_from)
+    if date_to is not None:
+        statement = statement.where(func.date(Order.order_create_date) <= date_to)
     if branch_ids:
         statement = statement.where(Order.branch_id.in_(branch_ids))
 

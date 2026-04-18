@@ -38,6 +38,17 @@ def test_hy_metric_total_routes_to_supported_intent() -> None:
     assert plan.retrieval.date_to == date(2026, 3, 7)
 
 
+def test_missing_date_total_defaults_to_overall_history() -> None:
+    plan = plan_analysis("What were total sales?")
+
+    assert plan.intent is AnalysisIntent.METRIC_TOTAL
+    assert plan.retrieval is not None
+    assert plan.retrieval.mode is RetrievalMode.TOTAL
+    assert plan.retrieval.metric is MetricName.SALES_TOTAL
+    assert plan.retrieval.date_from is None
+    assert plan.retrieval.date_to is None
+
+
 def test_ru_comparison_routes_to_supported_intent() -> None:
     plan = plan_analysis("Сравни продажи 2026-03-10 to 2026-03-16 с предыдущим периодом.")
 
@@ -304,6 +315,44 @@ def test_relative_armenian_word_number_item_query_with_typo_variant_is_supported
     assert plan.business_query.item_metric is ItemPerformanceMetric.QUANTITY_SOLD
     assert plan.business_query.date_to == today
     assert plan.business_query.date_from == _shift_months(today, -2) + date.resolution
+    assert plan.business_query.limit == 1
+
+
+def test_relative_armenian_least_sold_item_query_routes_to_bottom_k() -> None:
+    today = date.today()
+    plan = plan_analysis("Վերջին մեկ տարվա ամենաքիչ վաճառք ունեցող ապրանքը։")
+
+    assert plan.business_query is not None
+    assert plan.business_query.kind is BusinessQueryKind.ITEM_PERFORMANCE
+    assert plan.business_query.item_metric is ItemPerformanceMetric.QUANTITY_SOLD
+    assert plan.business_query.ranking_mode is RankingMode.BOTTOM_K
+    assert plan.business_query.date_to == today
+    assert plan.business_query.date_from == _shift_years(today, -1) + date.resolution
+    assert plan.business_query.limit == 1
+
+
+def test_relative_armenian_least_sold_item_query_with_typo_routes_to_bottom_k() -> None:
+    today = date.today()
+    plan = plan_analysis("Վերջին մեկ տարվա ամենքիչ վաճառք ունեցող ապրանքը։")
+
+    assert plan.business_query is not None
+    assert plan.business_query.kind is BusinessQueryKind.ITEM_PERFORMANCE
+    assert plan.business_query.item_metric is ItemPerformanceMetric.QUANTITY_SOLD
+    assert plan.business_query.ranking_mode is RankingMode.BOTTOM_K
+    assert plan.business_query.date_to == today
+    assert plan.business_query.date_from == _shift_years(today, -1) + date.resolution
+    assert plan.business_query.limit == 1
+
+
+def test_no_date_item_revenue_query_defaults_to_overall_history() -> None:
+    plan = plan_analysis("որն ա իմ ամենաեկամտաբեր ապրանքը")
+
+    assert plan.business_query is not None
+    assert plan.business_query.kind is BusinessQueryKind.ITEM_PERFORMANCE
+    assert plan.business_query.item_metric is ItemPerformanceMetric.ITEM_REVENUE
+    assert plan.business_query.ranking_mode is RankingMode.TOP_K
+    assert plan.business_query.date_from is None
+    assert plan.business_query.date_to is None
     assert plan.business_query.limit == 1
 
 

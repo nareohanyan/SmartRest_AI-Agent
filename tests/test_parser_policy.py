@@ -13,13 +13,13 @@ def test_policy_rejects_non_business_prompt_without_date() -> None:
     assert decision.action is ParserPolicyAction.REJECT
 
 
-def test_policy_clarifies_business_prompt_missing_date() -> None:
+def test_policy_defaults_business_prompt_without_date_to_overall() -> None:
     parsed = _parse_question("Եկամուտս ինչքա՞նա կազմել։")
 
     decision = decide_policy(parsed)
 
-    assert decision.action is ParserPolicyAction.CLARIFY
-    assert decision.clarification_question is not None
+    assert decision.action is ParserPolicyAction.PROCEED
+    assert decision.clarification_question is None
 
 
 def test_policy_proceeds_for_supported_business_query() -> None:

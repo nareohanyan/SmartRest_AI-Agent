@@ -29,8 +29,8 @@ class PolicyDecision(SchemaModel):
 
 def evaluate_business_query_policy(
     *,
-    date_from: date,
-    date_to: date,
+    date_from: date | None,
+    date_to: date | None,
     scope: ResolveScopeResponse | None,
     settings: Settings,
     required_tool: ToolOperation,
@@ -45,21 +45,22 @@ def evaluate_business_query_policy(
             allowed=False,
         )
 
-    day_span = (date_to - date_from).days + 1
-    if day_span <= 0:
-        return PolicyDecision(
-            route=PolicyRoute.CLARIFY,
-            reason_code="invalid_date_range",
-            reason_message="Date range is invalid.",
-            allowed=False,
-        )
-    if day_span > settings.planner_max_date_range_days:
-        return PolicyDecision(
-            route=PolicyRoute.CLARIFY,
-            reason_code="date_range_too_wide",
-            reason_message="Date range exceeds configured planning window.",
-            allowed=False,
-        )
+    if date_from is not None and date_to is not None:
+        day_span = (date_to - date_from).days + 1
+        if day_span <= 0:
+            return PolicyDecision(
+                route=PolicyRoute.CLARIFY,
+                reason_code="invalid_date_range",
+                reason_message="Date range is invalid.",
+                allowed=False,
+            )
+        if day_span > settings.planner_max_date_range_days:
+            return PolicyDecision(
+                route=PolicyRoute.CLARIFY,
+                reason_code="date_range_too_wide",
+                reason_message="Date range exceeds configured planning window.",
+                allowed=False,
+            )
 
     if requested_branch_ids:
         missing_branch_ids = _missing_branch_permissions(
@@ -288,7 +289,7 @@ def evaluate_plan_policy(
             allowed=False,
         )
 
-    if retrieval_mode is None or retrieval_metric is None or date_from is None or date_to is None:
+    if retrieval_mode is None or retrieval_metric is None:
         return PolicyDecision(
             route=PolicyRoute.CLARIFY,
             reason_code="missing_retrieval",
@@ -296,21 +297,22 @@ def evaluate_plan_policy(
             allowed=False,
         )
 
-    day_span = (date_to - date_from).days + 1
-    if day_span <= 0:
-        return PolicyDecision(
-            route=PolicyRoute.CLARIFY,
-            reason_code="invalid_date_range",
-            reason_message="Date range is invalid.",
-            allowed=False,
-        )
-    if day_span > settings.planner_max_date_range_days:
-        return PolicyDecision(
-            route=PolicyRoute.CLARIFY,
-            reason_code="date_range_too_wide",
-            reason_message="Date range exceeds configured planning window.",
-            allowed=False,
-        )
+    if date_from is not None and date_to is not None:
+        day_span = (date_to - date_from).days + 1
+        if day_span <= 0:
+            return PolicyDecision(
+                route=PolicyRoute.CLARIFY,
+                reason_code="invalid_date_range",
+                reason_message="Date range is invalid.",
+                allowed=False,
+            )
+        if day_span > settings.planner_max_date_range_days:
+            return PolicyDecision(
+                route=PolicyRoute.CLARIFY,
+                reason_code="date_range_too_wide",
+                reason_message="Date range exceeds configured planning window.",
+                allowed=False,
+            )
 
     if _estimated_tool_calls(plan_intent) > settings.planner_max_tool_calls:
         return PolicyDecision(
@@ -380,12 +382,21 @@ def evaluate_plan_policy(
         )
 
     if plan_intent is AnalysisIntent.METRIC_TOTAL:
-        mapped_report_id = _map_retrieval_to_report(
-            mode=retrieval_mode,
-            metric=retrieval_metric,
-            dimension=retrieval_dimension,
-        )
+        mapped_report_id = None
+        if date_from is not None and date_to is not None:
+            mapped_report_id = _map_retrieval_to_report(
+                mode=retrieval_mode,
+                metric=retrieval_metric,
+                dimension=retrieval_dimension,
+            )
         if mapped_report_id is not None:
+            if date_from is None or date_to is None:
+                return PolicyDecision(
+                    route=PolicyRoute.RUN_TOTAL,
+                    reason_code="ok",
+                    reason_message="Plan is allowed for dynamic total metric execution.",
+                    allowed=True,
+                )
             if mapped_report_id not in scope.allowed_report_ids:
                 return PolicyDecision(
                     route=PolicyRoute.REJECT,

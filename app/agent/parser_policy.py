@@ -5,6 +5,17 @@ from app.agent.parser_structures import ParsedQuestion, ParserPolicyAction, Pars
 
 def decide_policy(parsed: ParsedQuestion) -> ParserPolicyDecision:
     if parsed.date_range is None:
+        if parsed.wants_comparison:
+            return ParserPolicyDecision(
+                action=ParserPolicyAction.CLARIFY,
+                clarification_question=_clarification_question(parsed.language),
+                reasoning_notes="Comparison requests require an explicit date range.",
+            )
+        if parsed.business_query is not None or parsed.metric is not None:
+            return ParserPolicyDecision(
+                action=ParserPolicyAction.PROCEED,
+                reasoning_notes="No explicit date range provided; defaulting to overall history.",
+            )
         if not parsed.has_business_signal:
             return ParserPolicyDecision(
                 action=ParserPolicyAction.REJECT,

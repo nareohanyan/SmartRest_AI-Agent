@@ -85,6 +85,18 @@ class BusinessQueryKind(str, Enum):
     RECEIPT_SUMMARY = "receipt_summary"
 
 
+def _validate_optional_date_range(
+    date_from: date | None,
+    date_to: date | None,
+    *,
+    context: str,
+) -> None:
+    if (date_from is None) != (date_to is None):
+        raise ValueError(f"{context} requires both date_from and date_to when either is set")
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise ValueError("date_from must be on or before date_to")
+
+
 class RankingSpec(SchemaModel):
     mode: RankingMode
     k: int = Field(default=3, ge=1, le=20)
@@ -103,14 +115,17 @@ class RankingSpec(SchemaModel):
 class RetrievalSpec(SchemaModel):
     mode: RetrievalMode
     metric: MetricName
-    date_from: date
-    date_to: date
+    date_from: date | None = None
+    date_to: date | None = None
     dimension: DimensionName | None = None
 
     @model_validator(mode="after")
     def validate_range_and_dimension(self) -> RetrievalSpec:
-        if self.date_from > self.date_to:
-            raise ValueError("date_from must be on or before date_to")
+        _validate_optional_date_range(
+            self.date_from,
+            self.date_to,
+            context="retrieval",
+        )
         if self.mode is RetrievalMode.BREAKDOWN and self.dimension is None:
             raise ValueError("breakdown retrieval requires dimension")
         if self.mode is RetrievalMode.TOTAL and self.dimension is not None:
@@ -162,15 +177,20 @@ class RetrievalScope(SchemaModel):
 
 class TotalMetricRequest(SchemaModel):
     metric: MetricName
-    date_from: date
-    date_to: date
+    date_from: date | None = None
+    date_to: date | None = None
     scope: RetrievalScope | None = None
+
+    @model_validator(mode="after")
+    def validate_date_range(self) -> TotalMetricRequest:
+        _validate_optional_date_range(self.date_from, self.date_to, context="total metric request")
+        return self
 
 
 class TotalMetricResponse(SchemaModel):
     metric: MetricName
-    date_from: date
-    date_to: date
+    date_from: date | None = None
+    date_to: date | None = None
     value: Decimal
     base_metrics: dict[str, Decimal] = Field(default_factory=dict)
     warnings: list[ToolWarningCode] = Field(default_factory=list)
@@ -185,16 +205,21 @@ class BreakdownItem(SchemaModel):
 class BreakdownRequest(SchemaModel):
     metric: MetricName
     dimension: DimensionName
-    date_from: date
-    date_to: date
+    date_from: date | None = None
+    date_to: date | None = None
     scope: RetrievalScope | None = None
+
+    @model_validator(mode="after")
+    def validate_date_range(self) -> BreakdownRequest:
+        _validate_optional_date_range(self.date_from, self.date_to, context="breakdown request")
+        return self
 
 
 class BreakdownResponse(SchemaModel):
     metric: MetricName
     dimension: DimensionName
-    date_from: date
-    date_to: date
+    date_from: date | None = None
+    date_to: date | None = None
     items: list[BreakdownItem] = Field(default_factory=list)
     total_value: Decimal
     warnings: list[ToolWarningCode] = Field(default_factory=list)
@@ -207,17 +232,22 @@ class TimeseriesPoint(SchemaModel):
 
 class TimeseriesRequest(SchemaModel):
     metric: MetricName
-    date_from: date
-    date_to: date
+    date_from: date | None = None
+    date_to: date | None = None
     dimension: DimensionName = DimensionName.DAY
     scope: RetrievalScope | None = None
+
+    @model_validator(mode="after")
+    def validate_date_range(self) -> TimeseriesRequest:
+        _validate_optional_date_range(self.date_from, self.date_to, context="timeseries request")
+        return self
 
 
 class TimeseriesResponse(SchemaModel):
     metric: MetricName
     dimension: DimensionName
-    date_from: date
-    date_to: date
+    date_from: date | None = None
+    date_to: date | None = None
     points: list[TimeseriesPoint] = Field(default_factory=list)
     warnings: list[ToolWarningCode] = Field(default_factory=list)
 
@@ -230,8 +260,8 @@ class ItemPerformanceItem(SchemaModel):
 
 class ItemPerformanceRequest(SchemaModel):
     metric: ItemPerformanceMetric
-    date_from: date
-    date_to: date
+    date_from: date | None = None
+    date_to: date | None = None
     limit: int = Field(default=10, ge=1, le=50)
     ranking_mode: RankingMode = RankingMode.TOP_K
     item_query: str | None = Field(default=None, min_length=1)
@@ -239,15 +269,18 @@ class ItemPerformanceRequest(SchemaModel):
 
     @model_validator(mode="after")
     def validate_date_range(self) -> ItemPerformanceRequest:
-        if self.date_from > self.date_to:
-            raise ValueError("date_from must be on or before date_to")
+        _validate_optional_date_range(
+            self.date_from,
+            self.date_to,
+            context="item performance request",
+        )
         return self
 
 
 class BusinessQuerySpec(SchemaModel):
     kind: BusinessQueryKind
-    date_from: date
-    date_to: date
+    date_from: date | None = None
+    date_to: date | None = None
     item_metric: ItemPerformanceMetric | None = None
     item_query: str | None = Field(default=None, min_length=1)
     limit: int = Field(default=10, ge=1, le=50)
@@ -255,8 +288,11 @@ class BusinessQuerySpec(SchemaModel):
 
     @model_validator(mode="after")
     def validate_contract(self) -> BusinessQuerySpec:
-        if self.date_from > self.date_to:
-            raise ValueError("date_from must be on or before date_to")
+        _validate_optional_date_range(
+            self.date_from,
+            self.date_to,
+            context="business query",
+        )
         if self.kind is BusinessQueryKind.ITEM_PERFORMANCE and self.item_metric is None:
             raise ValueError("item_metric is required for item_performance business queries")
         if self.kind is not BusinessQueryKind.ITEM_PERFORMANCE and self.item_metric is not None:
@@ -266,28 +302,31 @@ class BusinessQuerySpec(SchemaModel):
 
 class ItemPerformanceResponse(SchemaModel):
     metric: ItemPerformanceMetric
-    date_from: date
-    date_to: date
+    date_from: date | None = None
+    date_to: date | None = None
     ranking_mode: RankingMode
     items: list[ItemPerformanceItem] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 
 class CustomerSummaryRequest(SchemaModel):
-    date_from: date
-    date_to: date
+    date_from: date | None = None
+    date_to: date | None = None
     scope: RetrievalScope | None = None
 
     @model_validator(mode="after")
     def validate_date_range(self) -> CustomerSummaryRequest:
-        if self.date_from > self.date_to:
-            raise ValueError("date_from must be on or before date_to")
+        _validate_optional_date_range(
+            self.date_from,
+            self.date_to,
+            context="customer summary request",
+        )
         return self
 
 
 class CustomerSummaryResponse(SchemaModel):
-    date_from: date
-    date_to: date
+    date_from: date | None = None
+    date_to: date | None = None
     unique_clients: int = Field(ge=0)
     identified_order_count: int = Field(ge=0)
     total_order_count: int = Field(ge=0)
@@ -296,20 +335,23 @@ class CustomerSummaryResponse(SchemaModel):
 
 
 class ReceiptSummaryRequest(SchemaModel):
-    date_from: date
-    date_to: date
+    date_from: date | None = None
+    date_to: date | None = None
     scope: RetrievalScope | None = None
 
     @model_validator(mode="after")
     def validate_date_range(self) -> ReceiptSummaryRequest:
-        if self.date_from > self.date_to:
-            raise ValueError("date_from must be on or before date_to")
+        _validate_optional_date_range(
+            self.date_from,
+            self.date_to,
+            context="receipt summary request",
+        )
         return self
 
 
 class ReceiptSummaryResponse(SchemaModel):
-    date_from: date
-    date_to: date
+    date_from: date | None = None
+    date_to: date | None = None
     receipt_count: int = Field(ge=0)
     linked_order_count: int = Field(ge=0)
     status_counts: dict[str, int] = Field(default_factory=dict)

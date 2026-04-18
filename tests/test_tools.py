@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
@@ -187,6 +188,37 @@ def test_fetch_breakdown_tool_uses_live_service_when_scope_is_present(
     )
 
     assert response.items[0].label == "branch_1"
+    assert response.warnings == []
+
+
+def test_live_analytics_service_category_breakdown_uses_category_subquery() -> None:
+    live_analytics_module = importlib.import_module("app.agent.services.live_analytics")
+
+    class _FakeSession:
+        def __enter__(self) -> _FakeSession:
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            del exc_type, exc, tb
+
+        def execute(self, statement: object) -> list[SimpleNamespace]:
+            del statement
+            return [SimpleNamespace(bucket="Khinkali", value=Decimal("7"))]
+
+    service = live_analytics_module.LiveAnalyticsService(session_factory=lambda: _FakeSession())
+
+    response = service.get_breakdown(
+        BreakdownRequest(
+            metric=MetricName.SALES_TOTAL,
+            dimension=DimensionName.CATEGORY,
+            date_from=date(2026, 3, 1),
+            date_to=date(2026, 3, 7),
+            scope=RetrievalScope(profile_id=201),
+        )
+    )
+
+    assert response.items == [BreakdownItem(label="Khinkali", value=Decimal("7.00"))]
+    assert response.total_value == Decimal("7.00")
     assert response.warnings == []
 
 
