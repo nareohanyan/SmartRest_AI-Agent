@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from time import perf_counter
 from typing import Any
 
-from app.agent.llm import LLMClientError, build_response_messages, get_llm_client
+from app.agent.llm import LLMClientError, build_response_messages
 from app.agent.response_text import _question_language
-from app.core.config import get_settings
 from app.schemas.agent import (
     AgentState,
     ExecutionStepStatus,
@@ -91,14 +91,16 @@ def _render_answer_with_llm(
     state: AgentState,
     route: str,
     fallback_answer: str,
+    settings_loader: Callable[[], Any],
+    llm_client_factory: Callable[[], Any],
 ) -> tuple[str, list[str]]:
-    settings = get_settings()
+    settings = settings_loader()
     api_key = getattr(settings, "openai_api_key", None)
     if api_key is None or not str(api_key).strip():
         return fallback_answer, state.warnings
 
     try:
-        llm_client = get_llm_client()
+        llm_client = llm_client_factory()
         messages = build_response_messages(
             {
                 "route": route,

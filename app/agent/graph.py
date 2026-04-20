@@ -14,8 +14,10 @@ from app.agent.graph_support import (
     _build_retrieval_scope,
     _map_analysis_intent_to_runtime_intent,
     _merge_warnings,
-    _render_answer_with_llm,
     _stringify_tool_warnings,
+)
+from app.agent.graph_support import (
+    _render_answer_with_llm as _render_answer_with_llm_impl,
 )
 from app.agent.llm import (
     LLMClientError,
@@ -62,7 +64,6 @@ from app.schemas.analysis import (
     LegacyReportTask,
     LegacyReportTaskResult,
     MovingAverageRequest,
-    RankingMode,
     RankItemsRequest,
     ReceiptSummaryRequest,
     TimeseriesRequest,
@@ -72,6 +73,21 @@ from app.schemas.analysis import (
 from app.schemas.calculations import ComputeMetricsRequest
 from app.schemas.reports import ReportFilters, ReportRequest, ReportType
 from app.schemas.tools import AccessStatus, RunReportRequest, ToolOperation
+
+
+def _render_answer_with_llm(
+    *,
+    state: AgentState,
+    route: str,
+    fallback_answer: str,
+) -> tuple[str, list[str]]:
+    return _render_answer_with_llm_impl(
+        state=state,
+        route=route,
+        fallback_answer=fallback_answer,
+        settings_loader=get_settings,
+        llm_client_factory=get_llm_client,
+    )
 
 
 def _resolve_scope_node(state: AgentState) -> dict[str, Any]:
