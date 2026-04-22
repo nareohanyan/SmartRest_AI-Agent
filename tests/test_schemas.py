@@ -8,6 +8,14 @@ import pytest
 from pydantic import ValidationError
 
 from app.schemas.agent import AgentState, IntentType, RunStatus
+from app.schemas.analysis import (
+    BreakdownRequest,
+    DimensionName,
+    MetricName,
+    RetrievalScope,
+    TimeseriesRequest,
+    TotalMetricRequest,
+)
 from app.schemas.reports import (
     ReportDefinition,
     ReportFilterKey,
@@ -18,6 +26,7 @@ from app.schemas.reports import (
 )
 from app.schemas.tools import (
     AccessStatus,
+    ExportMode,
     GetReportDefinitionRequest,
     GetReportDefinitionResponse,
     ListReportsRequest,
@@ -26,6 +35,7 @@ from app.schemas.tools import (
     ResolveScopeResponse,
     RunReportRequest,
     RunReportResponse,
+    ToolOperation,
 )
 
 
@@ -68,7 +78,7 @@ def _report_result_payload() -> dict[str, object]:
 
 def _agent_state_payload() -> dict[str, object]:
     return {
-        "thread_id": "11111111-1111-1111-1111-111111111111",
+        "chat_id": "11111111-1111-1111-1111-111111111111",
         "run_id": "22222222-2222-2222-2222-222222222222",
         "user_question": "What were sales last week?",
         "scope_request": _identity_payload(),
@@ -147,6 +157,30 @@ def test_agent_state_extra_field_fails() -> None:
     )
 
 
+def test_agent_state_onboarding_disallows_clarification_flags() -> None:
+    payload = _agent_state_payload()
+    payload["status"] = "onboarding"
+    payload["needs_clarification"] = True
+    payload["clarification_question"] = "Please provide a date range."
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentState.model_validate(payload)
+
+    assert "status=onboarding requires needs_clarification=false" in str(exc_info.value)
+
+
+def test_agent_state_onboarding_disallows_clarification_question() -> None:
+    payload = _agent_state_payload()
+    payload["status"] = "onboarding"
+    payload["needs_clarification"] = False
+    payload["clarification_question"] = "Please provide a date range."
+
+    with pytest.raises(ValidationError) as exc_info:
+        AgentState.model_validate(payload)
+
+    assert "status=onboarding requires clarification_question=null" in str(exc_info.value)
+
+
 def test_report_contracts_valid_payloads() -> None:
     report_filters = ReportFilters.model_validate(_filters_payload())
     report_request = ReportRequest.model_validate(
@@ -197,6 +231,15 @@ def test_resolve_scope_contracts_valid_and_invalid() -> None:
 
     assert scope_request.user_id == 1
     assert scope_response.status is AccessStatus.GRANTED
+    assert scope_response.allowed_branch_ids == ["*"]
+    assert scope_response.allowed_export_modes is not None
+    assert scope_response.allowed_metric_ids == [metric.value for metric in MetricName]
+    assert scope_response.allowed_dimension_ids == [
+        dimension.value for dimension in DimensionName
+    ]
+    assert scope_response.allowed_metrics == list(MetricName)
+    assert scope_response.allowed_dimensions == list(DimensionName)
+    assert scope_response.allowed_tool_operations == list(ToolOperation)
 
     with pytest.raises(ValidationError) as missing_field_exc:
         ResolveScopeRequest.model_validate({"user_id": 1, "profile_nick": "nick_1"})
@@ -215,6 +258,109 @@ def test_resolve_scope_contracts_valid_and_invalid() -> None:
         )
 
     assert "denial_reason is required when status is denied" in str(denied_reason_exc.value)
+
+
+def test_resolve_scope_accepts_explicit_granular_permissions() -> None:
+    scope_response = ResolveScopeResponse.model_validate(
+        {
+            "status": "granted",
+            "allowed_report_ids": ["sales_total"],
+            "allowed_branch_ids": ["branch_1"],
+            "allowed_export_modes": ["csv"],
+            "allowed_metrics": ["sales_total"],
+            "allowed_dimensions": ["source"],
+            "allowed_tool_operations": ["fetch_breakdown", "top_k"],
+        }
+    )
+
+    assert scope_response.allowed_branch_ids == ["branch_1"]
+    assert scope_response.allowed_export_modes == [ExportMode.CSV]
+    assert scope_response.allowed_metrics == [MetricName.SALES_TOTAL]
+    assert scope_response.allowed_dimensions == [DimensionName.SOURCE]
+    assert scope_response.allowed_metric_ids == [MetricName.SALES_TOTAL.value]
+    assert scope_response.allowed_dimension_ids == [DimensionName.SOURCE.value]
+    assert scope_response.allowed_tool_operations == [
+        ToolOperation.FETCH_BREAKDOWN,
+        ToolOperation.TOP_K,
+    ]
+
+
+def test_resolve_scope_accepts_id_permissions_outside_legacy_enums() -> None:
+    scope_response = ResolveScopeResponse.model_validate(
+        {
+            "status": "granted",
+            "allowed_report_ids": ["sales_total"],
+            "allowed_branch_ids": ["branch_1", "branch_2"],
+            "allowed_export_modes": ["xlsx"],
+            "allowed_metric_ids": ["sales_total", "completed_order_count"],
+            "allowed_dimension_ids": ["source", "branch"],
+            "allowed_tool_operations": ["fetch_breakdown"],
+        }
+    )
+
+    assert scope_response.allowed_branch_ids == ["branch_1", "branch_2"]
+    assert scope_response.allowed_export_modes == [ExportMode.XLSX]
+    assert scope_response.allowed_metric_ids == ["sales_total", "completed_order_count"]
+    assert scope_response.allowed_dimension_ids == ["source", "branch"]
+    assert scope_response.allowed_metrics == [
+        MetricName.SALES_TOTAL,
+        MetricName.COMPLETED_ORDER_COUNT,
+    ]
+    assert scope_response.allowed_dimensions == [DimensionName.SOURCE, DimensionName.BRANCH]
+
+
+def test_resolve_scope_request_accepts_requested_branch_and_export() -> None:
+    scope_request = ResolveScopeRequest.model_validate(
+        {
+            **_identity_payload(),
+            "requested_branch_ids": ["branch_1"],
+            "requested_export_mode": "csv",
+        }
+    )
+
+    assert scope_request.requested_branch_ids == ["branch_1"]
+    assert scope_request.requested_export_mode is ExportMode.CSV
+
+
+def test_analysis_retrieval_requests_accept_live_scope() -> None:
+    scope = RetrievalScope.model_validate(
+        {
+            "profile_id": 42,
+            "branch_ids": [7, 8],
+            "source": "glovo",
+        }
+    )
+
+    total_request = TotalMetricRequest.model_validate(
+        {
+            "metric": "sales_total",
+            "date_from": "2026-03-01",
+            "date_to": "2026-03-07",
+            "scope": scope.model_dump(),
+        }
+    )
+    breakdown_request = BreakdownRequest.model_validate(
+        {
+            "metric": "sales_total",
+            "dimension": "branch",
+            "date_from": "2026-03-01",
+            "date_to": "2026-03-07",
+            "scope": scope.model_dump(),
+        }
+    )
+    timeseries_request = TimeseriesRequest.model_validate(
+        {
+            "metric": "sales_total",
+            "date_from": "2026-03-01",
+            "date_to": "2026-03-07",
+            "dimension": "day",
+            "scope": scope.model_dump(),
+        }
+    )
+
+    assert total_request.scope == scope
+    assert breakdown_request.scope == scope
+    assert timeseries_request.scope == scope
 
 
 def test_list_reports_contracts_valid_and_invalid() -> None:

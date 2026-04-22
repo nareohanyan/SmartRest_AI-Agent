@@ -12,7 +12,7 @@ services:
       --port 8000
 
   smartrest_db:
-    image: postgres:16
+    image: postgres:18.3
     restart: unless-stopped
     profiles: ["db"]
     environment:
@@ -20,7 +20,7 @@ services:
       POSTGRES_USER: smartrest
       POSTGRES_PASSWORD: smartrest
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata_v18:/var/lib/postgresql
       - ./sql/postgres/init:/docker-entrypoint-initdb.d:ro
     ports:
       - "127.0.0.1:5433:5432"
@@ -39,5 +39,32 @@ services:
     ports:
       - "8081:8080"
 
+  database:
+    image: mariadb:5.5.64
+    platform: linux/amd64
+    container_name: database
+    restart: unless-stopped
+    ports:
+      - "35564:3306"
+    environment:
+      - MYSQL_DATABASE=smartrest
+      - MYSQL_ROOT_PASSWORD=pass
+    volumes:
+      - db-dev:/var/lib/mysql
+      # - ./docker/build/db/:/docker-entrypoint-initdb.d/
+      # - ./docker/com/mysql/my.cnf:/etc/mysql/my.cnf
+
+  phpmyadmin:
+    image: phpmyadmin
+    container_name: phpmyadmin
+    restart: unless-stopped
+    ports:
+      - "8046:80"
+    environment:
+      - PMA_ARBITRARY=1
+    depends_on:
+      - database
+
 volumes:
-  pgdata:
+  pgdata_v18:
+  db-dev:

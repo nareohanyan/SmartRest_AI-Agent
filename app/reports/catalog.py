@@ -1,4 +1,4 @@
-"""Static report catalog for deterministic mock reporting."""
+"""Static report catalog for SmartRest-backed reporting."""
 
 from __future__ import annotations
 

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
 from app.agent.llm.exceptions import LLMClientError
 from app.api.schemas import AgentRunRequest
+from app.core.auth import VerifiedIdentity
 from app.persistence.runtime_persistence import (
     FinishRunPersistenceResult,
     StartRunPersistenceResult,
@@ -15,12 +16,21 @@ from app.persistence.runtime_persistence import (
 from app.schemas.agent import LLMErrorCategory, RunStatus
 from app.services.agent_runtime import AgentRuntimeExecutionError, AgentRuntimeService
 
+_VERIFIED_IDENTITY = VerifiedIdentity(profile_nick="nick", user_id=101, profile_id=201)
+
 
 def _request_payload() -> AgentRunRequest:
     return AgentRunRequest.model_validate(
         {
-            "thread_id": "11111111-1111-1111-1111-111111111111",
+            "chat_id": "11111111-1111-1111-1111-111111111111",
             "user_question": "What were total sales 2026-03-01 to 2026-03-07?",
+            "auth": {
+                "profile_nick": "nick",
+                "user_id": 101,
+                "profile_id": 201,
+                "current_timestamp": 0,
+                "token": "0" * 64,
+            },
             "scope_request": {
                 "user_id": 101,
                 "profile_id": 201,
@@ -99,10 +109,11 @@ class _PersistenceSpy:
 
 
 def test_runtime_merges_persistence_warnings_into_response() -> None:
+    internal_run_id = uuid4()
     spy = _PersistenceSpy(
         start_result=StartRunPersistenceResult(
-            thread_id=uuid4(),
-            internal_run_id=uuid4(),
+            chat_id=uuid4(),
+            internal_run_id=internal_run_id,
             warnings=["persistence_warning_start"],
         ),
         finish_result=FinishRunPersistenceResult(
@@ -114,9 +125,10 @@ def test_runtime_merges_persistence_warnings_into_response() -> None:
         persistence_service=spy,  # type: ignore[arg-type]
     )
 
-    response = runtime_service.run(_request_payload())
+    response = runtime_service.run(_request_payload(), verified_identity=_VERIFIED_IDENTITY)
 
     assert response.status is RunStatus.COMPLETED
+    assert response.run_id == internal_run_id
     assert response.warnings == [
         "runtime_warning",
         "persistence_warning_start",
@@ -130,6 +142,7 @@ def test_runtime_merges_persistence_warnings_into_response() -> None:
     "terminal_status",
     [
         RunStatus.COMPLETED,
+        RunStatus.ONBOARDING,
         RunStatus.CLARIFY,
         RunStatus.REJECTED,
         RunStatus.DENIED,
@@ -141,7 +154,7 @@ def test_runtime_persists_finish_for_each_terminal_graph_status(
 ) -> None:
     spy = _PersistenceSpy(
         start_result=StartRunPersistenceResult(
-            thread_id=uuid4(),
+            chat_id=uuid4(),
             internal_run_id=uuid4(),
         ),
         finish_result=FinishRunPersistenceResult(),
@@ -151,7 +164,7 @@ def test_runtime_persists_finish_for_each_terminal_graph_status(
         persistence_service=spy,  # type: ignore[arg-type]
     )
 
-    response = runtime_service.run(_request_payload())
+    response = runtime_service.run(_request_payload(), verified_identity=_VERIFIED_IDENTITY)
 
     assert response.status is terminal_status
     assert len(spy.finish_calls) == 1
@@ -165,7 +178,7 @@ def test_runtime_persists_finish_for_each_terminal_graph_status(
 def test_runtime_persists_failed_terminal_status_on_llm_error() -> None:
     spy = _PersistenceSpy(
         start_result=StartRunPersistenceResult(
-            thread_id=uuid4(),
+            chat_id=uuid4(),
             internal_run_id=uuid4(),
         ),
         finish_result=FinishRunPersistenceResult(),
@@ -178,7 +191,7 @@ def test_runtime_persists_failed_terminal_status_on_llm_error() -> None:
     )
 
     with pytest.raises(AgentRuntimeExecutionError):
-        runtime_service.run(_request_payload())
+        runtime_service.run(_request_payload(), verified_identity=_VERIFIED_IDENTITY)
 
     assert len(spy.finish_calls) == 1
     assert spy.finish_calls[0]["status"] is RunStatus.FAILED
@@ -188,7 +201,7 @@ def test_runtime_persists_failed_terminal_status_on_llm_error() -> None:
 def test_runtime_persists_failed_terminal_status_on_internal_error() -> None:
     spy = _PersistenceSpy(
         start_result=StartRunPersistenceResult(
-            thread_id=uuid4(),
+            chat_id=uuid4(),
             internal_run_id=uuid4(),
         ),
         finish_result=FinishRunPersistenceResult(),
@@ -199,8 +212,35 @@ def test_runtime_persists_failed_terminal_status_on_internal_error() -> None:
     )
 
     with pytest.raises(AgentRuntimeExecutionError):
-        runtime_service.run(_request_payload())
+        runtime_service.run(_request_payload(), verified_identity=_VERIFIED_IDENTITY)
 
     assert len(spy.finish_calls) == 1
     assert spy.finish_calls[0]["status"] is RunStatus.FAILED
     assert spy.finish_calls[0]["error_code"] == "runtime_internal_error"
+
+
+def test_runtime_uses_fallback_run_id_when_persistence_run_id_missing() -> None:
+    spy = _PersistenceSpy(
+        start_result=StartRunPersistenceResult(
+            chat_id=None,
+            internal_run_id=None,
+            warnings=["persistence_warning_start"],
+        ),
+        finish_result=FinishRunPersistenceResult(
+            warnings=["persistence_warning_finish"],
+        ),
+    )
+    runtime_service = AgentRuntimeService(
+        graph_factory=lambda: _SuccessGraph(),
+        persistence_service=spy,  # type: ignore[arg-type]
+    )
+
+    response = runtime_service.run(_request_payload(), verified_identity=_VERIFIED_IDENTITY)
+
+    assert response.status is RunStatus.COMPLETED
+    assert isinstance(response.run_id, UUID)
+    assert response.warnings == [
+        "runtime_warning",
+        "persistence_warning_start",
+        "persistence_warning_finish",
+    ]

@@ -4,6 +4,7 @@ from enum import Enum
 
 from pydantic import Field, model_validator
 
+from app.schemas.analysis import DimensionName, MetricName
 from app.schemas.base import SchemaModel
 from app.schemas.reports import ReportDefinition, ReportRequest, ReportResult, ReportType
 
@@ -13,16 +14,51 @@ class AccessStatus(str, Enum):
     DENIED = "denied"
 
 
+class ExportMode(str, Enum):
+    CSV = "csv"
+    XLSX = "xlsx"
+    PDF = "pdf"
+
+
+class ToolOperation(str, Enum):
+    RESOLVE_SCOPE = "resolve_scope"
+    RUN_REPORT = "run_report"
+    COMPUTE_SCALAR_METRICS = "compute_scalar_metrics"
+    FETCH_TOTAL_METRIC = "fetch_total_metric"
+    FETCH_BREAKDOWN = "fetch_breakdown"
+    FETCH_TIMESERIES = "fetch_timeseries"
+    FETCH_ITEM_PERFORMANCE = "fetch_item_performance"
+    FETCH_CUSTOMER_SUMMARY = "fetch_customer_summary"
+    FETCH_RECEIPT_SUMMARY = "fetch_receipt_summary"
+    ATTACH_BREAKDOWN_SHARE = "attach_breakdown_share"
+    TOP_K = "top_k"
+    BOTTOM_K = "bottom_k"
+    MOVING_AVERAGE = "moving_average"
+    TREND_SLOPE = "trend_slope"
+
+
 class ResolveScopeRequest(SchemaModel):
     user_id: int
     profile_id: int
     profile_nick: str = Field(min_length=1)
     metadata: dict[str, str] = Field(default_factory=dict)
+    requested_branch_ids: list[str] | None = None
+    requested_export_mode: ExportMode | None = None
 
 
 class ResolveScopeResponse(SchemaModel):
     status: AccessStatus
     allowed_report_ids: list[ReportType]
+    source_system_id: int | None = None
+    canonical_profile_id: int | None = None
+    canonical_user_id: int | None = None
+    allowed_branch_ids: list[str] | None = None
+    allowed_export_modes: list[ExportMode] | None = None
+    allowed_metric_ids: list[str] | None = None
+    allowed_dimension_ids: list[str] | None = None
+    allowed_metrics: list[MetricName] | None = None
+    allowed_dimensions: list[DimensionName] | None = None
+    allowed_tool_operations: list[ToolOperation] | None = None
     denial_reason: str | None = None
 
     @model_validator(mode="after")
@@ -32,6 +68,44 @@ class ResolveScopeResponse(SchemaModel):
 
         if self.status is AccessStatus.GRANTED and self.denial_reason is not None:
             raise ValueError("denial_reason must be null when status is granted")
+
+        if self.status is AccessStatus.GRANTED:
+            if self.allowed_branch_ids is None:
+                self.allowed_branch_ids = ["*"]
+            if self.allowed_export_modes is None:
+                self.allowed_export_modes = list(ExportMode)
+
+            if self.allowed_metric_ids is None:
+                if self.allowed_metrics is not None:
+                    self.allowed_metric_ids = [metric.value for metric in self.allowed_metrics]
+                else:
+                    self.allowed_metric_ids = [metric.value for metric in MetricName]
+            if self.allowed_dimension_ids is None:
+                if self.allowed_dimensions is not None:
+                    self.allowed_dimension_ids = [
+                        dimension.value for dimension in self.allowed_dimensions
+                    ]
+                else:
+                    self.allowed_dimension_ids = [
+                        dimension.value for dimension in DimensionName
+                    ]
+
+            if self.allowed_metrics is None:
+                self.allowed_metrics = []
+                for metric_id in self.allowed_metric_ids:
+                    try:
+                        self.allowed_metrics.append(MetricName(metric_id))
+                    except ValueError:
+                        continue
+            if self.allowed_dimensions is None:
+                self.allowed_dimensions = []
+                for dimension_id in self.allowed_dimension_ids:
+                    try:
+                        self.allowed_dimensions.append(DimensionName(dimension_id))
+                    except ValueError:
+                        continue
+            if self.allowed_tool_operations is None:
+                self.allowed_tool_operations = list(ToolOperation)
 
         return self
 

@@ -9,32 +9,56 @@ from sqlalchemy import Engine, create_engine, delete, select, text
 from sqlalchemy.orm import Session
 
 from app.api.schemas import AgentRunRequest
-from app.chat_analytics.models import AgentRun, Feedback, Message, Thread, ThreadHistory
+from app.chat_analytics.models import AgentRun, Base, Chat, ChatEvent, Feedback, Message
+from app.core.auth import VerifiedIdentity
 from app.persistence.runtime_persistence import RuntimePersistenceService
 from app.schemas.agent import RunStatus
 from app.services.agent_runtime import AgentRuntimeExecutionError, AgentRuntimeService
 
+_VERIFIED_IDENTITY = VerifiedIdentity(profile_nick="nick", user_id=101, profile_id=201)
+pytestmark = pytest.mark.integration
+
 
 def _chat_analytics_database_url() -> str:
-    db_url = os.getenv("CHAT_ANALYTICS_DATABASE_URL") or os.getenv(
-        "SMARTREST_CHAT_ANALYTICS_DATABASE_URL"
+    db_url = os.getenv("SMARTREST_CHAT_ANALYTICS_DATABASE_URL") or os.getenv(
+        "CHAT_ANALYTICS_DATABASE_URL"
     )
     if not db_url:
-        pytest.skip("CHAT_ANALYTICS_DATABASE_URL is not set; skipping DB integration tests.")
+        raise pytest.UsageError(
+            "Runtime persistence DB integration tests require "
+            "SMARTREST_CHAT_ANALYTICS_DATABASE_URL or CHAT_ANALYTICS_DATABASE_URL."
+        )
     return db_url
+
+
+def _schema_scoped_database_url(base_url: str, schema_name: str) -> str:
+    separator = "&" if "?" in base_url else "?"
+    return f"{base_url}{separator}options=-csearch_path={schema_name}"
 
 
 @pytest.fixture(scope="session")
 def analytics_engine() -> Iterator[Engine]:
-    engine = create_engine(_chat_analytics_database_url(), future=True)
+    base_db_url = _chat_analytics_database_url()
+    schema_name = f"test_runtime_{uuid4().hex}"
+    base_engine = create_engine(base_db_url, future=True)
+    engine = create_engine(_schema_scoped_database_url(base_db_url, schema_name), future=True)
     try:
+        with base_engine.begin() as connection:
+            connection.execute(text(f'CREATE SCHEMA "{schema_name}"'))
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
     except Exception as exc:
-        pytest.skip(f"Chat analytics DB is not reachable: {exc}")
+        raise pytest.UsageError(
+            "Runtime persistence DB integration tests require a reachable Postgres database. "
+            f"Connection error: {exc}"
+        ) from exc
 
+    Base.metadata.create_all(engine)
     yield engine
+    with base_engine.begin() as connection:
+        connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE'))
     engine.dispose()
+    base_engine.dispose()
 
 
 @pytest.fixture
@@ -50,11 +74,18 @@ def persistence_service(analytics_engine: Engine) -> RuntimePersistenceService:
     return RuntimePersistenceService(session_factory=_session_factory)
 
 
-def _request_payload(thread_id: UUID) -> AgentRunRequest:
+def _request_payload(chat_id: UUID) -> AgentRunRequest:
     return AgentRunRequest.model_validate(
         {
-            "thread_id": str(thread_id),
+            "chat_id": str(chat_id),
             "user_question": "What were total sales 2026-03-01 to 2026-03-07?",
+            "auth": {
+                "profile_nick": "nick",
+                "user_id": 101,
+                "profile_id": 201,
+                "current_timestamp": 0,
+                "token": "0" * 64,
+            },
             "scope_request": {
                 "user_id": 101,
                 "profile_id": 201,
@@ -65,13 +96,13 @@ def _request_payload(thread_id: UUID) -> AgentRunRequest:
     )
 
 
-def _cleanup_thread_records(engine: Engine, thread_id: UUID) -> None:
+def _cleanup_chat_records(engine: Engine, chat_id: UUID) -> None:
     with Session(bind=engine) as session:
-        session.execute(delete(Feedback).where(Feedback.thread_id == thread_id))
-        session.execute(delete(Message).where(Message.thread_id == thread_id))
-        session.execute(delete(AgentRun).where(AgentRun.thread_id == thread_id))
-        session.execute(delete(ThreadHistory).where(ThreadHistory.thread_id == thread_id))
-        session.execute(delete(Thread).where(Thread.id == thread_id))
+        session.execute(delete(Feedback).where(Feedback.chat_id == chat_id))
+        session.execute(delete(Message).where(Message.chat_id == chat_id))
+        session.execute(delete(AgentRun).where(AgentRun.chat_id == chat_id))
+        session.execute(delete(ChatEvent).where(ChatEvent.chat_id == chat_id))
+        session.execute(delete(Chat).where(Chat.id == chat_id))
         session.commit()
 
 
@@ -107,45 +138,48 @@ class _FailingGraph:
         raise RuntimeError("graph failed")
 
 
-def _fetch_artifacts(session: Session, thread_id: UUID) -> tuple[Thread | None, AgentRun, Message]:
-    thread = session.get(Thread, thread_id)
-    runs = session.scalars(select(AgentRun).where(AgentRun.thread_id == thread_id)).all()
-    messages = session.scalars(select(Message).where(Message.thread_id == thread_id)).all()
+def _fetch_artifacts(session: Session, chat_id: UUID) -> tuple[Chat | None, AgentRun, Message]:
+    chat = session.get(Chat, chat_id)
+    runs = session.scalars(select(AgentRun).where(AgentRun.chat_id == chat_id)).all()
+    messages = session.scalars(select(Message).where(Message.chat_id == chat_id)).all()
 
     assert len(runs) == 1
     assert len(messages) == 1
-    return thread, runs[0], messages[0]
+    return chat, runs[0], messages[0]
 
 
 def test_runtime_persists_completed_run(
     analytics_engine: Engine,
     persistence_service: RuntimePersistenceService,
 ) -> None:
-    thread_id = uuid4()
+    chat_id = uuid4()
     runtime_service = AgentRuntimeService(
         graph_factory=lambda: _TerminalGraph(status=RunStatus.COMPLETED, final_answer="completed"),
         persistence_service=persistence_service,
     )
 
     try:
-        response = runtime_service.run(_request_payload(thread_id))
+        response = runtime_service.run(
+            _request_payload(chat_id),
+            verified_identity=_VERIFIED_IDENTITY,
+        )
         assert response.status is RunStatus.COMPLETED
 
         with Session(bind=analytics_engine) as session:
-            thread, run, message = _fetch_artifacts(session, thread_id)
-            assert thread is not None
+            chat, run, message = _fetch_artifacts(session, chat_id)
+            assert chat is not None
             assert run.status == "completed"
             assert run.error_code is None
-            assert message.answer == "completed"
+            assert message.answer_text == "completed"
     finally:
-        _cleanup_thread_records(analytics_engine, thread_id)
+        _cleanup_chat_records(analytics_engine, chat_id)
 
 
 def test_runtime_persists_clarify_run(
     analytics_engine: Engine,
     persistence_service: RuntimePersistenceService,
 ) -> None:
-    thread_id = uuid4()
+    chat_id = uuid4()
     runtime_service = AgentRuntimeService(
         graph_factory=lambda: _TerminalGraph(
             status=RunStatus.CLARIFY,
@@ -157,23 +191,26 @@ def test_runtime_persists_clarify_run(
     )
 
     try:
-        response = runtime_service.run(_request_payload(thread_id))
+        response = runtime_service.run(
+            _request_payload(chat_id),
+            verified_identity=_VERIFIED_IDENTITY,
+        )
         assert response.status is RunStatus.CLARIFY
 
         with Session(bind=analytics_engine) as session:
-            _thread, run, message = _fetch_artifacts(session, thread_id)
+            _chat, run, message = _fetch_artifacts(session, chat_id)
             assert run.status == "clarification_needed"
             assert run.error_code is None
-            assert message.answer == "Please clarify date range."
+            assert message.answer_text == "Please clarify date range."
     finally:
-        _cleanup_thread_records(analytics_engine, thread_id)
+        _cleanup_chat_records(analytics_engine, chat_id)
 
 
 def test_runtime_persists_denied_run_as_failed_with_code(
     analytics_engine: Engine,
     persistence_service: RuntimePersistenceService,
 ) -> None:
-    thread_id = uuid4()
+    chat_id = uuid4()
     runtime_service = AgentRuntimeService(
         graph_factory=lambda: _TerminalGraph(
             status=RunStatus.DENIED,
@@ -183,23 +220,26 @@ def test_runtime_persists_denied_run_as_failed_with_code(
     )
 
     try:
-        response = runtime_service.run(_request_payload(thread_id))
+        response = runtime_service.run(
+            _request_payload(chat_id),
+            verified_identity=_VERIFIED_IDENTITY,
+        )
         assert response.status is RunStatus.DENIED
 
         with Session(bind=analytics_engine) as session:
-            _thread, run, message = _fetch_artifacts(session, thread_id)
+            _chat, run, message = _fetch_artifacts(session, chat_id)
             assert run.status == "failed"
             assert run.error_code == "denied"
-            assert message.answer == "Access denied."
+            assert message.answer_text == "Access denied."
     finally:
-        _cleanup_thread_records(analytics_engine, thread_id)
+        _cleanup_chat_records(analytics_engine, chat_id)
 
 
 def test_runtime_persists_failed_run_on_graph_exception(
     analytics_engine: Engine,
     persistence_service: RuntimePersistenceService,
 ) -> None:
-    thread_id = uuid4()
+    chat_id = uuid4()
     runtime_service = AgentRuntimeService(
         graph_factory=lambda: _FailingGraph(),
         persistence_service=persistence_service,
@@ -207,12 +247,15 @@ def test_runtime_persists_failed_run_on_graph_exception(
 
     try:
         with pytest.raises(AgentRuntimeExecutionError):
-            runtime_service.run(_request_payload(thread_id))
+            runtime_service.run(
+                _request_payload(chat_id),
+                verified_identity=_VERIFIED_IDENTITY,
+            )
 
         with Session(bind=analytics_engine) as session:
-            _thread, run, message = _fetch_artifacts(session, thread_id)
+            _chat, run, message = _fetch_artifacts(session, chat_id)
             assert run.status == "failed"
             assert run.error_code == "runtime_internal_error"
-            assert message.answer is None
+            assert message.answer_text is None
     finally:
-        _cleanup_thread_records(analytics_engine, thread_id)
+        _cleanup_chat_records(analytics_engine, chat_id)

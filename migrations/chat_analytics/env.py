@@ -21,11 +21,13 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-chat_analytics_db_url = os.getenv("CHAT_ANALYTICS_DATABASE_URL")
+chat_analytics_db_url = os.getenv("SMARTREST_CHAT_ANALYTICS_DATABASE_URL") or os.getenv(
+    "CHAT_ANALYTICS_DATABASE_URL"
+)
 if not chat_analytics_db_url:
     raise RuntimeError(
-        "CHAT_ANALYTICS_DATABASE_URL is not set. "
-        "Set it in your environment before running Alembic."
+        "SMARTREST_CHAT_ANALYTICS_DATABASE_URL or CHAT_ANALYTICS_DATABASE_URL is not set. "
+        "Set one of them in your environment before running Alembic."
     )
 
 config.set_main_option("sqlalchemy.url", chat_analytics_db_url)

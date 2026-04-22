@@ -16,7 +16,7 @@ def get_operational_engine() -> Engine:
     db_url = settings.database_url
 
     if db_url is None or not db_url.strip():
-        raise ValueError("DATABASE_URL is not configured")
+        raise ValueError("SMARTREST_DATABASE_URL or DATABASE_URL is not configured")
 
     return create_engine(
         db_url,

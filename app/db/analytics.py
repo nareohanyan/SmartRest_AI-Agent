@@ -15,7 +15,9 @@ def get_chat_analytics_engine() -> Engine:
     settings = get_settings()
     db_url = settings.chat_analytics_database_url
     if db_url is None or not db_url.strip():
-        raise ValueError("CHAT_ANALYTICS_DATABASE_URL is not configured")
+        raise ValueError(
+            "SMARTREST_CHAT_ANALYTICS_DATABASE_URL or CHAT_ANALYTICS_DATABASE_URL is not configured"
+        )
 
     return create_engine(db_url, pool_pre_ping=True, future=True)
 

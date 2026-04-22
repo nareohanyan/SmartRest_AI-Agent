@@ -6,7 +6,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.chat_analytics.models import AgentRun, Message, Thread
+from app.chat_analytics.models import AgentRun, Chat, ChatMetadata, Message
 from app.persistence.errors import PersistenceNotFoundError, PersistenceValidationError
 from app.persistence.status_mapper import map_runtime_status_to_db
 from app.schemas.agent import RunStatus
@@ -30,39 +30,47 @@ class ChatAnalyticsRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def get_or_create_thread(
+    def get_or_create_chat(
         self,
         *,
-        thread_id: UUID,
+        chat_id: UUID,
         user_id: int | str,
         profile_id: int | str,
         profile_nick: str,
         title: str | None = None,
         metadata_json: dict[str, object] | None = None,
-    ) -> Thread:
+    ) -> Chat:
         if not profile_nick.strip():
             raise PersistenceValidationError("profile_nick must be non-empty.")
 
-        thread = self._session.get(Thread, thread_id)
-        if thread is not None:
-            return thread
+        chat = self._session.get(Chat, chat_id)
+        if chat is not None:
+            return chat
 
-        thread = Thread(
-            id=thread_id,
+        chat = Chat(
+            id=chat_id,
             user_id=_coerce_bigint(user_id, field_name="user_id"),
             profile_id=_coerce_bigint(profile_id, field_name="profile_id"),
             profile_nick=profile_nick.strip(),
             title=title,
-            metadata_json=metadata_json,
         )
-        self._session.add(thread)
+        self._session.add(chat)
         self._session.flush()
-        return thread
+        if metadata_json:
+            for key, value in metadata_json.items():
+                metadata_entry = ChatMetadata(
+                    chat_id=cast(UUID, chat.id),
+                    key=key,
+                    value_json=value,
+                )
+                self._session.add(metadata_entry)
+            self._session.flush()
+        return chat
 
     def create_run_started(
         self,
         *,
-        thread_id: UUID,
+        chat_id: UUID,
         user_id: int | str,
         profile_id: int | str,
         profile_nick: str,
@@ -71,12 +79,12 @@ class ChatAnalyticsRepository:
         if not profile_nick.strip():
             raise PersistenceValidationError("profile_nick must be non-empty.")
 
-        thread = self._session.get(Thread, thread_id)
-        if thread is None:
-            raise PersistenceNotFoundError(f"Thread not found: {thread_id}")
+        chat = self._session.get(Chat, chat_id)
+        if chat is None:
+            raise PersistenceNotFoundError(f"Chat not found: {chat_id}")
 
         run = AgentRun(
-            thread_id=thread_id,
+            chat_id=chat_id,
             user_id=_coerce_bigint(user_id, field_name="user_id"),
             profile_id=_coerce_bigint(profile_id, field_name="profile_id"),
             profile_nick=profile_nick.strip(),
@@ -113,30 +121,53 @@ class ChatAnalyticsRepository:
     def write_message(
         self,
         *,
-        thread_id: UUID,
+        chat_id: UUID,
         run_id: UUID,
-        question: str,
-        answer: str | None = None,
+        question_text: str,
+        answer_text: str | None = None,
+        status: RunStatus = RunStatus.COMPLETED,
+        error_message: str | None = None,
+        error_code: str | None = None,
     ) -> Message:
-        if not question.strip():
-            raise PersistenceValidationError("question must be non-empty.")
+        if not question_text.strip():
+            raise PersistenceValidationError("question_text must be non-empty.")
 
-        thread = self._session.get(Thread, thread_id)
-        if thread is None:
-            raise PersistenceNotFoundError(f"Thread not found: {thread_id}")
+        chat = self._session.get(Chat, chat_id)
+        if chat is None:
+            raise PersistenceNotFoundError(f"Chat not found: {chat_id}")
 
         run = self._session.get(AgentRun, run_id)
         if run is None:
             raise PersistenceNotFoundError(f"Run not found: {run_id}")
 
         message = Message(
-            thread_id=thread_id,
+            chat_id=chat_id,
             run_id=run_id,
-            question=question.strip(),
-            answer=answer,
+            question_text=question_text.strip(),
+            answer_text=answer_text,
+            status=_map_runtime_status_to_message_status(status),
+            clarification_needed=status is RunStatus.CLARIFY,
+            error_message=error_message,
+            error_code=error_code,
         )
         self._session.add(message)
-        thread_obj = cast(Any, thread)
-        thread_obj.last_message_at = datetime.now(timezone.utc)
+        chat_obj = cast(Any, chat)
+        chat_obj.last_message_at = datetime.now(timezone.utc)
         self._session.flush()
         return message
+
+
+def _map_runtime_status_to_message_status(status: RunStatus) -> str:
+    if status is RunStatus.COMPLETED:
+        return "completed"
+    if status is RunStatus.ONBOARDING:
+        return "onboarding"
+    if status is RunStatus.CLARIFY:
+        return "clarify"
+    if status is RunStatus.REJECTED:
+        return "rejected"
+    if status is RunStatus.DENIED:
+        return "denied"
+    if status is RunStatus.FAILED:
+        return "failed"
+    raise PersistenceValidationError(f"Unsupported message status: {status.value}")

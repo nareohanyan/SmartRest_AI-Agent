@@ -7,7 +7,8 @@ from uuid import uuid4
 
 from app.agent.graph import build_agent_graph
 from app.agent.llm.exceptions import LLMClientError
-from app.api.schemas import AgentRunRequest, AgentRunResponse
+from app.api.schemas import AgentRunRequest, AgentRunResponse, PlatformAdminRunRequest
+from app.core.auth import VerifiedIdentity, VerifiedPlatformAdmin
 from app.persistence.runtime_persistence import (
     RuntimePersistenceService,
     get_runtime_persistence_service,
@@ -47,26 +48,91 @@ class AgentRuntimeService:
         self._graph_factory = graph_factory
         self._persistence_service = persistence_service or get_runtime_persistence_service()
 
-    def run(self, request: AgentRunRequest) -> AgentRunResponse:
-        run_id = uuid4()
-        initial_state = AgentState(
-            thread_id=request.thread_id,
-            run_id=run_id,
+    def run(
+        self,
+        request: AgentRunRequest,
+        *,
+        verified_identity: VerifiedIdentity,
+    ) -> AgentRunResponse:
+        scope_request = ResolveScopeRequest.model_validate(
+            {
+                "user_id": verified_identity.user_id,
+                "profile_id": verified_identity.profile_id,
+                "profile_nick": verified_identity.profile_nick,
+                "metadata": request.scope_request.metadata,
+                "requested_branch_ids": request.scope_request.requested_branch_ids,
+                "requested_export_mode": request.scope_request.requested_export_mode,
+            }
+        )
+        return self._run_internal(
+            chat_id=request.chat_id,
             user_question=request.user_question,
-            scope_request=ResolveScopeRequest.model_validate(request.scope_request.model_dump()),
+            scope_request=scope_request,
+            persistence_identity=verified_identity,
+            metadata_json={
+                "chat_id": str(request.chat_id),
+                "actor_type": "tenant_user",
+            },
+        )
+
+    def run_as_platform_admin(
+        self,
+        request: PlatformAdminRunRequest,
+        *,
+        target_identity: VerifiedIdentity,
+        verified_admin: VerifiedPlatformAdmin,
+    ) -> AgentRunResponse:
+        scope_request = ResolveScopeRequest.model_validate(
+            {
+                "user_id": target_identity.user_id,
+                "profile_id": target_identity.profile_id,
+                "profile_nick": target_identity.profile_nick,
+                "metadata": request.metadata,
+                "requested_branch_ids": request.requested_branch_ids,
+                "requested_export_mode": request.requested_export_mode,
+            }
+        )
+        return self._run_internal(
+            chat_id=request.chat_id,
+            user_question=request.user_question,
+            scope_request=scope_request,
+            persistence_identity=target_identity,
+            metadata_json={
+                "chat_id": str(request.chat_id),
+                "actor_type": "platform_admin",
+                "admin_id": verified_admin.admin_id,
+                "target_profile_id": target_identity.profile_id,
+                "target_user_id": target_identity.user_id,
+            },
+        )
+
+    def _run_internal(
+        self,
+        *,
+        chat_id: Any,
+        user_question: str,
+        scope_request: ResolveScopeRequest,
+        persistence_identity: VerifiedIdentity,
+        metadata_json: dict[str, Any],
+    ) -> AgentRunResponse:
+        start_persistence_result = self._persistence_service.start_run(
+            chat_id=chat_id,
+            user_id=persistence_identity.user_id,
+            profile_id=persistence_identity.profile_id,
+            profile_nick=persistence_identity.profile_nick,
+            intent=None,
+            metadata_json=metadata_json,
+        )
+        start_warnings = start_persistence_result.warnings
+        run_id = start_persistence_result.internal_run_id or uuid4()
+        initial_state = AgentState(
+            chat_id=chat_id,
+            run_id=run_id,
+            user_question=user_question,
+            scope_request=scope_request,
             needs_clarification=False,
             status=RunStatus.RUNNING,
         )
-
-        start_persistence_result = self._persistence_service.start_run(
-            thread_id=request.thread_id,
-            user_id=request.scope_request.user_id,
-            profile_id=request.scope_request.profile_id,
-            profile_nick=request.scope_request.profile_nick,
-            intent=None,
-            metadata_json={"thread_id": str(request.thread_id)},
-        )
-        start_warnings = start_persistence_result.warnings
 
         try:
             graph = self._graph_factory()
@@ -74,10 +140,10 @@ class AgentRuntimeService:
             final_state = AgentState.model_validate(runtime_output)
         except LLMClientError as exc:
             self._persistence_service.finish_run(
-                thread_id=start_persistence_result.thread_id,
+                chat_id=start_persistence_result.chat_id,
                 internal_run_id=start_persistence_result.internal_run_id,
                 status=RunStatus.FAILED,
-                question=request.user_question,
+                question=user_question,
                 answer=None,
                 error_message=str(exc),
                 error_code=f"llm_{exc.category.value}",
@@ -88,10 +154,10 @@ class AgentRuntimeService:
             ) from exc
         except Exception as exc:
             self._persistence_service.finish_run(
-                thread_id=start_persistence_result.thread_id,
+                chat_id=start_persistence_result.chat_id,
                 internal_run_id=start_persistence_result.internal_run_id,
                 status=RunStatus.FAILED,
-                question=request.user_question,
+                question=user_question,
                 answer=None,
                 error_message=str(exc),
                 error_code="runtime_internal_error",
@@ -102,7 +168,7 @@ class AgentRuntimeService:
             ) from exc
 
         finish_persistence_result = self._persistence_service.finish_run(
-            thread_id=start_persistence_result.thread_id,
+            chat_id=start_persistence_result.chat_id,
             internal_run_id=start_persistence_result.internal_run_id,
             status=final_state.status,
             question=final_state.user_question,
@@ -120,7 +186,7 @@ class AgentRuntimeService:
         )
 
         return AgentRunResponse(
-            thread_id=final_state.thread_id,
+            chat_id=final_state.chat_id,
             run_id=final_state.run_id,
             status=final_state.status,
             answer=final_state.final_answer,
