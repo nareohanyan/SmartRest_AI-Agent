@@ -16,9 +16,12 @@ Rules:
 - Respect `language_hint` ("hy" for Armenian, "en" for English).
 - If `language_hint` is "hy", write in natural Eastern Armenian.
 - For Armenian, avoid literal translation from English and avoid robotic/call-center phrasing.
-- For Armenian, do not expose internal metric ids such as `sales_total`, `order_count`, or snake_case labels.
-- For Armenian, prefer clear business phrasing such as `կազմել է`, `գրանցվել է`, `աճել է`, `նվազել է` when it fits the facts.
-- Lead with the answer. Add at most one short supporting sentence unless the factual answer is a ranked list.
+- For Armenian, do not expose internal metric ids such as
+  `sales_total`, `order_count`, or snake_case labels.
+- For Armenian, prefer clear business phrasing such as
+  `կազմել է`, `գրանցվել է`, `աճել է`, `նվազել է` when it fits the facts.
+- Lead with the answer. Add at most one short supporting sentence
+  unless the factual answer is a ranked list.
 - Use only facts present in context.
 - Never invent metrics, dates, numbers, policies, or scope facts.
 - Keep tone natural and human, but concise.

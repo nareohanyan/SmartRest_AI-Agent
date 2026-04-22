@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import re
-from enum import Enum
 from decimal import Decimal
+from enum import Enum
 from typing import Any
 
 from app.schemas.analysis import (
@@ -43,7 +43,11 @@ _COUNT_KEYS = {
     "items_per_order",
 }
 _METRIC_LABELS: dict[str, dict[str, str]] = {
-    "sales_total": {"hy": "ընդհանուր վաճառք", "ru": "общие продажи", "en": "total sales"},
+    "sales_total": {
+        "hy": "ընդհանուր վաճառք",
+        "ru": "общие продажи",
+        "en": "total sales",
+    },
     "gross_sales_total": {
         "hy": "համախառն վաճառք",
         "ru": "валовые продажи",
@@ -54,8 +58,16 @@ _METRIC_LABELS: dict[str, dict[str, str]] = {
         "ru": "количество заказов",
         "en": "order count",
     },
-    "average_check": {"hy": "միջին չեկ", "ru": "средний чек", "en": "average check"},
-    "quantity_sold": {"hy": "վաճառված քանակ", "ru": "проданное количество", "en": "quantity sold"},
+    "average_check": {
+        "hy": "միջին չեկ",
+        "ru": "средний чек",
+        "en": "average check",
+    },
+    "quantity_sold": {
+        "hy": "վաճառված քանակ",
+        "ru": "проданное количество",
+        "en": "quantity sold",
+    },
     "items_per_order": {
         "hy": "մեկ պատվերի միջին ապրանքների քանակ",
         "ru": "среднее количество позиций в заказе",
@@ -71,9 +83,21 @@ _METRIC_LABELS: dict[str, dict[str, str]] = {
         "ru": "доля заказов со скидкой",
         "en": "discounted order share",
     },
-    "discount_amount": {"hy": "զեղչի գումար", "ru": "сумма скидки", "en": "discount amount"},
-    "refund_amount": {"hy": "վերադարձի գումար", "ru": "сумма возврата", "en": "refund amount"},
-    "refund_rate": {"hy": "վերադարձների մասնաբաժին", "ru": "доля возвратов", "en": "refund rate"},
+    "discount_amount": {
+        "hy": "զեղչի գումար",
+        "ru": "сумма скидки",
+        "en": "discount amount",
+    },
+    "refund_amount": {
+        "hy": "վերադարձի գումար",
+        "ru": "сумма возврата",
+        "en": "refund amount",
+    },
+    "refund_rate": {
+        "hy": "վերադարձների մասնաբաժին",
+        "ru": "доля возвратов",
+        "en": "refund rate",
+    },
     "delivery_order_count": {
         "hy": "առաքման պատվերների քանակ",
         "ru": "количество доставок",
@@ -124,7 +148,11 @@ _DIMENSION_LABELS: dict[str, dict[str, str]] = {
     "branch": {"hy": "մասնաճյուղ", "ru": "филиал", "en": "branch"},
     "day": {"hy": "օր", "ru": "день", "en": "day"},
     "weekday": {"hy": "շաբաթվա օր", "ru": "день недели", "en": "weekday"},
-    "payment_method": {"hy": "վճարման եղանակ", "ru": "способ оплаты", "en": "payment method"},
+    "payment_method": {
+        "hy": "վճարման եղանակ",
+        "ru": "способ оплаты",
+        "en": "payment method",
+    },
     "category": {"hy": "կատեգորիա", "ru": "категория", "en": "category"},
     "cashier": {"hy": "գանձապահ", "ru": "кассир", "en": "cashier"},
 }
@@ -260,7 +288,12 @@ def _find_derived_value(
         metric_key = getattr(metric, "key", None)
         metric_value = getattr(metric, "value", None)
         if metric_key == key and metric_value is not None:
-            return metric_value
+            if isinstance(metric_value, Decimal):
+                return metric_value
+            try:
+                return Decimal(str(metric_value))
+            except Exception:
+                return None
     return None
 
 
@@ -357,7 +390,9 @@ def _format_item_value(
     if metric is ItemPerformanceMetric.DISTINCT_ORDERS:
         quantized = int(value) if value == value.to_integral_value() else f"{value:.2f}"
         suffix = (
-            " պատվեր" if language == "hy" else (" заказов" if language == "ru" else " orders")
+            " պատվեր"
+            if language == "hy"
+            else (" заказов" if language == "ru" else " orders")
         )
         return f"{quantized}{suffix}"
     suffix = " դրամ" if language == "hy" else (" драм" if language == "ru" else "")
@@ -409,17 +444,24 @@ def _build_item_performance_summary(
     )
     if language == "hy":
         if business_query.ranking_mode is RankingMode.TOP_K:
-            header = f"{period_prefix_hy} ամենաուժեղ արդյունք ունեցած {len(response.items)} {metric_label} հետևյալն են."
+            header = (
+                f"{period_prefix_hy} ամենաուժեղ արդյունք ունեցած "
+                f"{len(response.items)} {metric_label} հետևյալն են."
+            )
         else:
-            header = f"{period_prefix_hy} ամենացածր արդյունք ունեցած {len(response.items)} {metric_label} հետևյալն են."
+            header = (
+                f"{period_prefix_hy} ամենացածր արդյունք ունեցած "
+                f"{len(response.items)} {metric_label} հետևյալն են."
+            )
     elif language == "ru":
-        ranking_label = "топ" if business_query.ranking_mode is RankingMode.TOP_K else "последние"
+        ranking_label = (
+            "топ" if business_query.ranking_mode is RankingMode.TOP_K else "последние"
+        )
         header = f"Вот {ranking_label} {len(response.items)} {metric_label} {period_label}."
     else:
         ranking_label = "top" if business_query.ranking_mode is RankingMode.TOP_K else "bottom"
         header = (
-            f"Here are the {ranking_label} {len(response.items)} {metric_label} "
-            f"{period_label}."
+            f"Here are the {ranking_label} {len(response.items)} {metric_label} {period_label}."
         )
 
     lines = [
@@ -433,13 +475,16 @@ def _build_item_performance_summary(
 def _safe_unsupported_answer(language: str) -> str:
     if language == "hy":
         return (
-            "Ցավոք ես չունեմ բավականաչափ ինֆորմացիա տվյալ հարցին պատասխանելու համար։ "
+            "Ցավոք ես չունեմ բավականաչափ ինֆորմացիա "
+            "տվյալ հարցին պատասխանելու համար։ "
             "Ավելին իմանալու համար կարող եք զանգահարել 060 44 55 66։ "
         )
     if language == "ru":
         return (
-            "К сожалению, у меня недостаточно информации, чтобы ответить на этот вопрос. "
-            "Для получения дополнительной информации вы можете позвонить по номеру 060 44 55 66."
+            "К сожалению, у меня недостаточно информации, "
+            "чтобы ответить на этот вопрос. Для получения "
+            "дополнительной информации вы можете позвонить "
+            "по номеру 060 44 55 66."
         )
     return (
         "Unfortunately i don't have enough information to answer your question. "
@@ -461,10 +506,7 @@ def _build_report_result_summary(
     derived_metrics: dict[str, Decimal],
     language: str,
 ) -> str:
-    metrics = {
-        metric.label: Decimal(str(metric.value))
-        for metric in result.metrics
-    }
+    metrics = {metric.label: Decimal(str(metric.value)) for metric in result.metrics}
     period_label = _format_period_label(
         date_from=result.filters.date_from,
         date_to=result.filters.date_to,
@@ -473,81 +515,109 @@ def _build_report_result_summary(
 
     if result.report_id is ReportType.SALES_TOTAL:
         sales_total = metrics.get("sales_total", Decimal("0"))
+        sales_total_amount = _format_metric_amount(
+            metric_key="sales_total",
+            value=sales_total,
+            language=language,
+        )
         if language == "hy":
             summary = (
                 f"{period_label} {_metric_subject_label('sales_total', language)} կազմել է "
-                f"{_format_metric_amount(metric_key='sales_total', value=sales_total, language=language)}։"
+                f"{sales_total_amount}։"
             )
         elif language == "ru":
             summary = (
-                f"{_metric_subject_label('sales_total', language)} {period_label} составили "
-                f"{_format_metric_amount(metric_key='sales_total', value=sales_total, language=language)}."
+                f"{_metric_subject_label('sales_total', language)} "
+                f"{period_label} составили "
+                f"{sales_total_amount}."
             )
         else:
             summary = (
-                f"{_metric_subject_label('sales_total', language).capitalize()} {period_label} were "
-                f"{_format_metric_amount(metric_key='sales_total', value=sales_total, language=language)}."
+                f"{_metric_subject_label('sales_total', language).capitalize()} "
+                f"{period_label} were "
+                f"{sales_total_amount}."
             )
         per_day = _find_derived_value(derived_metrics, "sales_total_per_day")
         if per_day is not None:
+            per_day_amount = _format_metric_amount(
+                metric_key="sales_total",
+                value=per_day,
+                language=language,
+            )
             if language == "hy":
                 summary = (
                     f"{summary} Միջին օրական վաճառքը կազմել է "
-                    f"{_format_metric_amount(metric_key='sales_total', value=per_day, language=language)}։"
+                    f"{per_day_amount}։"
                 )
             elif language == "ru":
                 summary = (
                     f"{summary} Среднее значение в день составило "
-                    f"{_format_metric_amount(metric_key='sales_total', value=per_day, language=language)}."
+                    f"{per_day_amount}."
                 )
             else:
-                summary = (
-                    f"{summary} Average per day was "
-                    f"{_format_metric_amount(metric_key='sales_total', value=per_day, language=language)}."
-                )
+                summary = f"{summary} Average per day was {per_day_amount}."
         return summary
 
     if result.report_id is ReportType.ORDER_COUNT:
         order_count = metrics.get("order_count", Decimal("0"))
+        order_count_amount = _format_metric_amount(
+            metric_key="order_count",
+            value=order_count,
+            language=language,
+        )
         summary = (
-            f"{period_label} {_metric_subject_label('order_count', language)} կազմել է "
-            f"{_format_metric_amount(metric_key='order_count', value=order_count, language=language)}։"
+            f"{period_label} {_metric_subject_label('order_count', language)} "
+            f"կազմել է {order_count_amount}։"
             if language == "hy"
             else (
-                f"{_metric_subject_label('order_count', language)} {period_label} составило "
-                f"{_format_metric_amount(metric_key='order_count', value=order_count, language=language)}."
+                f"{_metric_subject_label('order_count', language)} "
+                f"{period_label} составило {order_count_amount}."
                 if language == "ru"
                 else (
-                    f"{_metric_subject_label('order_count', language)} {period_label} was "
-                    f"{_format_metric_amount(metric_key='order_count', value=order_count, language=language)}."
+                    f"{_metric_subject_label('order_count', language)} "
+                    f"{period_label} was {order_count_amount}."
                 )
             )
         )
         per_day = _find_derived_value(derived_metrics, "order_count_per_day")
         if per_day is not None:
+            per_day_amount = _format_metric_amount(
+                metric_key="order_count",
+                value=per_day,
+                language=language,
+            )
             if language == "hy":
-                summary = f"{summary} Միջին օրական պատվերների քանակը կազմել է {_format_metric_amount(metric_key='order_count', value=per_day, language=language)}։"
+                summary = (
+                    f"{summary} Միջին օրական պատվերների քանակը կազմել է "
+                    f"{per_day_amount}։"
+                )
             elif language == "ru":
-                summary = f"{summary} В среднем в день было {_format_metric_amount(metric_key='order_count', value=per_day, language=language)}."
+                summary = f"{summary} В среднем в день было {per_day_amount}."
             else:
-                summary = f"{summary} Average per day was {_format_metric_amount(metric_key='order_count', value=per_day, language=language)}."
+                summary = f"{summary} Average per day was {per_day_amount}."
         return summary
 
     if result.report_id is ReportType.AVERAGE_CHECK:
         average_check = metrics.get("average_check", Decimal("0"))
+        average_check_amount = _format_metric_amount(
+            metric_key="average_check",
+            value=average_check,
+            language=language,
+        )
         if language == "hy":
             return (
                 f"{period_label} {_metric_subject_label('average_check', language)} կազմել է "
-                f"{_format_metric_amount(metric_key='average_check', value=average_check, language=language)}։"
+                f"{average_check_amount}։"
             )
         if language == "ru":
             return (
-                f"{_metric_subject_label('average_check', language)} {period_label} составил "
-                f"{_format_metric_amount(metric_key='average_check', value=average_check, language=language)}."
+                f"{_metric_subject_label('average_check', language)} "
+                f"{period_label} составил "
+                f"{average_check_amount}."
             )
         return (
-            f"{_metric_subject_label('average_check', language)} {period_label} was "
-            f"{_format_metric_amount(metric_key='average_check', value=average_check, language=language)}."
+            f"{_metric_subject_label('average_check', language)} "
+            f"{period_label} was {average_check_amount}."
         )
 
     if result.report_id is ReportType.SALES_BY_SOURCE:
@@ -557,11 +627,17 @@ def _build_report_result_summary(
             header = f"Продажи по источникам {period_label}:"
         else:
             header = f"Sales by source {period_label}:"
-        lines = [
-            f"{index}. {_format_breakdown_item_label(metric.label, language)} — "
-            f"{_format_metric_amount(metric_key='sales_total', value=metric.value, language=language)}"
-            for index, metric in enumerate(result.metrics, start=1)
-        ]
+        lines: list[str] = []
+        for index, metric in enumerate(result.metrics, start=1):
+            metric_amount = _format_metric_amount(
+                metric_key="sales_total",
+                value=metric.value,
+                language=language,
+            )
+            lines.append(
+                f"{index}. {_format_breakdown_item_label(metric.label, language)} — "
+                f"{metric_amount}"
+            )
         return "\n".join([header, *lines])
 
     metrics_text = ", ".join(
@@ -584,10 +660,20 @@ def _build_total_summary(
     metric_key = _enum_value(metric)
     amount = _format_metric_amount(metric_key=metric_key, value=value, language=language)
     if language == "hy":
-        summary = f"{period_label} {_metric_subject_label(metric, language)} կազմել է {amount}։"
+        summary = (
+            f"{period_label} {_metric_subject_label(metric, language)} կազմել է {amount}։"
+        )
         per_day = _find_derived_value(derived_metrics, f"{metric_key}_per_day")
         if per_day is not None:
-            summary = f"{summary} Միջին օրական ցուցանիշը կազմել է {_format_metric_amount(metric_key=metric_key, value=per_day, language=language)}։"
+            per_day_amount = _format_metric_amount(
+                metric_key=metric_key,
+                value=per_day,
+                language=language,
+            )
+            summary = (
+                f"{summary} Միջին օրական ցուցանիշը կազմել է "
+                f"{per_day_amount}։"
+            )
         return summary
     if language == "ru":
         return f"{_metric_subject_label(metric, language)} {period_label} составил {amount}."
@@ -613,31 +699,57 @@ def _build_comparison_summary(
         date_to=previous_date_to,
         language=language,
     )
-    current_amount = _format_metric_amount(metric_key=metric_key, value=current_value, language=language)
-    previous_amount = _format_metric_amount(metric_key=metric_key, value=previous_value, language=language)
+    current_amount = _format_metric_amount(
+        metric_key=metric_key, value=current_value, language=language
+    )
+    previous_amount = _format_metric_amount(
+        metric_key=metric_key, value=previous_value, language=language
+    )
     percent_change = _find_derived_value(derived_metrics, f"{metric_key}_percent_change")
 
     if language == "hy":
         summary = (
-            f"{current_period} {_metric_subject_label(metric, language)} կազմել է {current_amount}։ "
+            f"{current_period} {_metric_subject_label(metric, language)} "
+            f"կազմել է {current_amount}։ "
             f"{previous_period} այն կազմել է {previous_amount}։"
         )
         if percent_change is not None:
             if percent_change > 0:
-                summary = f"{summary} Նախորդ ժամանակահատվածի համեմատ այն աճել է {_format_metric_amount(metric_key=f'{metric_key}_percent_change', value=percent_change, language=language)}-ով։"
+                percent_change_amount = _format_metric_amount(
+                    metric_key=f"{metric_key}_percent_change",
+                    value=percent_change,
+                    language=language,
+                )
+                summary = (
+                    f"{summary} Նախորդ ժամանակահատվածի համեմատ այն աճել է "
+                    f"{percent_change_amount}-ով։"
+                )
             elif percent_change < 0:
-                summary = f"{summary} Նախորդ ժամանակահատվածի համեմատ այն նվազել է {_format_metric_amount(metric_key=f'{metric_key}_percent_change', value=abs(percent_change), language=language)}-ով։"
+                percent_change_amount = _format_metric_amount(
+                    metric_key=f"{metric_key}_percent_change",
+                    value=abs(percent_change),
+                    language=language,
+                )
+                summary = (
+                    f"{summary} Նախորդ ժամանակահատվածի համեմատ այն նվազել է "
+                    f"{percent_change_amount}-ով։"
+                )
             else:
-                summary = f"{summary} Նախորդ ժամանակահատվածի համեմատ այն մնացել է գրեթե անփոփոխ։"
+                summary = (
+                    f"{summary} Նախորդ ժամանակահատվածի համեմատ այն "
+                    "մնացել է գրեթե անփոփոխ։"
+                )
         return summary
 
     if language == "ru":
         return (
-            f"{_metric_subject_label(metric, language)} {current_period} составил {current_amount}, "
+            f"{_metric_subject_label(metric, language)} "
+            f"{current_period} составил {current_amount}, "
             f"а {previous_period} — {previous_amount}."
         )
     return (
-        f"{_metric_subject_label(metric, language).capitalize()} {current_period} was {current_amount}. "
+        f"{_metric_subject_label(metric, language).capitalize()} "
+        f"{current_period} was {current_amount}. "
         f"For the previous period ({previous_period}) it was {previous_amount}."
     )
 
@@ -664,21 +776,45 @@ def _build_breakdown_summary(
         context = _dimension_context_label(dimension, language)
         metric_context = _metric_context_label(metric, language)
         if ranking_mode is RankingMode.TOP_K:
-            header = f"{period_label} ժամանակահատվածում {context} {metric_context} առաջատար արդյունքներն են."
+            header = (
+                f"{period_label} ժամանակահատվածում {context} "
+                f"{metric_context} առաջատար արդյունքներն են."
+            )
         elif ranking_mode is RankingMode.BOTTOM_K:
-            header = f"{period_label} ժամանակահատվածում {context} {metric_context} ամենացածր արդյունքներն են."
+            header = (
+                f"{period_label} ժամանակահատվածում {context} "
+                f"{metric_context} ամենացածր արդյունքներն են."
+            )
         else:
-            header = f"{period_label} ժամանակահատվածում {context} {metric_context} բաշխումը հետևյալն է."
+            header = (
+                f"{period_label} ժամանակահատվածում {context} "
+                f"{metric_context} բաշխումը հետևյալն է."
+            )
     elif language == "ru":
-        header = f"{_metric_label(metric, language).capitalize()} {_dimension_context_label(dimension, language)} {period_label}:"
+        header = (
+            f"{_metric_label(metric, language).capitalize()} "
+            f"{_dimension_context_label(dimension, language)} "
+            f"{period_label}:"
+        )
     else:
-        header = f"{_metric_label(metric, language).capitalize()} {_dimension_context_label(dimension, language)} {period_label}:"
+        header = (
+            f"{_metric_label(metric, language).capitalize()} "
+            f"{_dimension_context_label(dimension, language)} "
+            f"{period_label}:"
+        )
 
-    lines = [
-        f"{index}. {_format_breakdown_item_label(item.label, language)} — "
-        f"{_format_metric_amount(metric_key=_enum_value(metric), value=item.value, language=language)}"
-        for index, item in enumerate(items, start=1)
-    ]
+    lines: list[str] = []
+    metric_key = _enum_value(metric)
+    for index, item in enumerate(items, start=1):
+        item_amount = _format_metric_amount(
+            metric_key=metric_key,
+            value=item.value,
+            language=language,
+        )
+        lines.append(
+            f"{index}. {_format_breakdown_item_label(item.label, language)} — "
+            f"{item_amount}"
+        )
     return "\n".join([header, *lines])
 
 
@@ -698,7 +834,10 @@ def _build_trend_summary(
     metric_key = _enum_value(metric)
     if not points:
         if language == "hy":
-            return f"{period_label} {_metric_context_label(metric, language)} միտքի տվյալներ չեն գտնվել։"
+            return (
+                f"{period_label} {_metric_context_label(metric, language)} "
+                "միտքի տվյալներ չեն գտնվել։"
+            )
         if language == "ru":
             return f"Для тренда {period_label} данные не найдены."
         return f"No trend data was found {period_label}."
@@ -706,18 +845,37 @@ def _build_trend_summary(
     peak_point = max(points, key=lambda point: point.value)
     if language == "hy":
         if slope_direction is None:
-            direction = "աճող" if points[-1].value > points[0].value else "նվազող" if points[-1].value < points[0].value else "կայուն"
+            direction = (
+                "աճող"
+                if points[-1].value > points[0].value
+                else "նվազող"
+                if points[-1].value < points[0].value
+                else "կայուն"
+            )
         else:
             direction = _localized_label(_DIRECTION_LABELS, slope_direction, language)
-        summary = f"{period_label} ընթացքում {_metric_context_label(metric, language)} միտքը {direction} է։"
+        summary = (
+            f"{period_label} ընթացքում {_metric_context_label(metric, language)} "
+            f"միտքը {direction} է։"
+        )
+        peak_amount = _format_metric_amount(
+            metric_key=metric_key,
+            value=peak_point.value,
+            language=language,
+        )
         summary = (
             f"{summary} Ամենաբարձր արժեքը գրանցվել է {peak_point.bucket}-ին՝ "
-            f"{_format_metric_amount(metric_key=metric_key, value=peak_point.value, language=language)}։"
+            f"{peak_amount}։"
         )
         if latest_moving_average is not None and moving_average_window is not None:
+            moving_average_amount = _format_metric_amount(
+                metric_key=metric_key,
+                value=latest_moving_average,
+                language=language,
+            )
             summary = (
                 f"{summary} {moving_average_window}-օրյա շարժվող միջինի վերջին արժեքը կազմել է "
-                f"{_format_metric_amount(metric_key=metric_key, value=latest_moving_average, language=language)}։"
+                f"{moving_average_amount}։"
             )
         if slope_per_day is not None:
             summary = (
@@ -727,8 +885,19 @@ def _build_trend_summary(
         return summary
 
     if language == "ru":
-        return f"Тренд {_metric_label(metric, language)} {period_label} имеет { _localized_label(_DIRECTION_LABELS, slope_direction or 'flat', language)} характер."
-    return f"The {_metric_label(metric, language)} trend {period_label} is {_localized_label(_DIRECTION_LABELS, slope_direction or 'flat', language)}."
+        direction_label = _localized_label(
+            _DIRECTION_LABELS,
+            slope_direction or "flat",
+            language,
+        )
+        return (
+            f"Тренд {_metric_label(metric, language)} {period_label} имеет "
+            f"{direction_label} характер."
+        )
+    return (
+        f"The {_metric_label(metric, language)} trend {period_label} is "
+        f"{_localized_label(_DIRECTION_LABELS, slope_direction or 'flat', language)}."
+    )
 
 
 def _build_customer_summary(
@@ -744,7 +913,8 @@ def _build_customer_summary(
     period_label = _format_period_label(date_from=date_from, date_to=date_to, language=language)
     if language == "hy":
         return (
-            f"{period_label} նույնականացված հաճախորդների քանակը կազմել է {unique_clients}։ "
+            f"{period_label} նույնականացված հաճախորդների քանակը "
+            f"կազմել է {unique_clients}։ "
             f"Նույնականացված պատվերների քանակը եղել է {identified_order_count}, "
             f"ընդհանուր պատվերների քանակը՝ {total_order_count}։ "
             f"Մեկ նույնականացված հաճախորդին միջինում բաժին է ընկել "
@@ -752,8 +922,10 @@ def _build_customer_summary(
         )
     if language == "ru":
         return (
-            f"За {period_label} количество уникальных клиентов составило {unique_clients}, "
-            f"идентифицированных заказов — {identified_order_count}, всех заказов — {total_order_count}."
+            f"За {period_label} количество уникальных клиентов "
+            f"составило {unique_clients}, идентифицированных "
+            f"заказов — {identified_order_count}, всех заказов — "
+            f"{total_order_count}."
         )
     return (
         f"For {period_label}, unique clients were {unique_clients}, identified orders were "
@@ -784,7 +956,8 @@ def _build_receipt_summary(
         return summary
     if language == "ru":
         return (
-            f"За {period_label} количество чеков составило {receipt_count}, "
+            f"За {period_label} количество чеков составило "
+            f"{receipt_count}, "
             f"из них с заказом связано {linked_order_count}. "
             f"Статусы: {status_summary or 'не найдены'}."
         )
@@ -796,9 +969,15 @@ def _build_receipt_summary(
 
 def _build_unsupported_task_fragment(*, user_subquery: str, language: str) -> str:
     if language == "hy":
-        return f"«{user_subquery}» հարցման համար դեռ աջակցվող ցուցանիշ չգտնվեց։"
+        return (
+            f"«{user_subquery}» հարցման համար դեռ աջակցվող "
+            "ցուցանիշ չգտնվեց։"
+        )
     if language == "ru":
-        return f"Для запроса «{user_subquery}» пока нет поддерживаемого показателя."
+        return (
+            f"Для запроса «{user_subquery}» пока нет "
+            "поддерживаемого показателя."
+        )
     return f"I couldn't answer '{user_subquery}' because that metric is not supported yet."
 
 

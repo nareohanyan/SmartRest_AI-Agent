@@ -68,7 +68,6 @@ from app.schemas.analysis import (
     CustomerSummaryRequest,
     DimensionName,
     ItemPerformanceRequest,
-    LegacyReportTask,
     LegacyReportTaskResult,
     MovingAverageRequest,
     RankItemsRequest,
@@ -78,7 +77,7 @@ from app.schemas.analysis import (
     TrendSlopeRequest,
 )
 from app.schemas.calculations import ComputeMetricsRequest
-from app.schemas.reports import ReportFilters, ReportRequest, ReportType
+from app.schemas.reports import ReportFilters, ReportRequest
 from app.schemas.tools import AccessStatus, RunReportRequest, ToolOperation
 
 
@@ -333,14 +332,10 @@ def _policy_gate_node(state: AgentState) -> dict[str, Any]:
         include_trend_slope=plan.include_trend_slope,
         has_scalar_calculations=bool(plan.scalar_calculations),
         requested_branch_ids=(
-            state.scope_request.requested_branch_ids
-            if state.scope_request is not None
-            else None
+            state.scope_request.requested_branch_ids if state.scope_request is not None else None
         ),
         requested_export_mode=(
-            state.scope_request.requested_export_mode
-            if state.scope_request is not None
-            else None
+            state.scope_request.requested_export_mode if state.scope_request is not None else None
         ),
     )
 
@@ -876,7 +871,9 @@ def _run_ranking_node(state: AgentState) -> dict[str, Any]:
         date_from=plan.retrieval.date_from,
         date_to=plan.retrieval.date_to,
         language=language,
-        ranking_mode=plan.ranking.mode if plan.intent is AnalysisIntent.RANKING and plan.ranking else None,
+        ranking_mode=plan.ranking.mode
+        if plan.intent is AnalysisIntent.RANKING and plan.ranking
+        else None,
     )
 
     return {
@@ -1111,9 +1108,7 @@ def _run_business_query_node(state: AgentState) -> dict[str, Any]:
 
 def _clarify_node(state: AgentState) -> dict[str, Any]:
     language = _question_language(state.user_question)
-    fallback_question = state.clarification_question or (
-        _clarification_fallback_question(language)
-    )
+    fallback_question = state.clarification_question or (_clarification_fallback_question(language))
     final_question, warnings = _render_answer_with_llm(
         state=state,
         route=PolicyRoute.CLARIFY.value,
@@ -1146,11 +1141,7 @@ def _reject_node(state: AgentState) -> dict[str, Any]:
     reason = state.policy_reason or (
         "Չաջակցվող հարցում։"
         if language == "hy"
-        else (
-            "Неподдерживаемый запрос."
-            if language == "ru"
-            else "Unsupported request."
-        )
+        else ("Неподдерживаемый запрос." if language == "ru" else "Unsupported request.")
     )
     supported_reports = (
         "Աջակցվող անալիտիկան ներառում է sales_total, gross_sales_total, "
@@ -1214,9 +1205,7 @@ def _compose_answer_node(state: AgentState) -> dict[str, Any]:
     if run_response is not None:
         language = _question_language(state.user_question)
         derived_metric_values = {
-            metric.key: metric.value
-            for metric in state.derived_metrics
-            if metric.value is not None
+            metric.key: metric.value for metric in state.derived_metrics if metric.value is not None
         }
         final_answer = _build_report_result_summary(
             result=run_response.result,
