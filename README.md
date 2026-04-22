@@ -20,6 +20,16 @@ Current repository state:
 
 The project is past prototype stage, but it is not fully hardened for production. The main remaining gaps are trust-boundary hardening, broader live analytics coverage, and stronger end-to-end strict-mode API validation.
 
+## Documentation
+
+Primary documents for maintainers and successors:
+
+- [HANDOFF.md](HANDOFF.md)
+- [KNOWN_ISSUES.md](KNOWN_ISSUES.md)
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- [docs/ONBOARDING.md](docs/ONBOARDING.md)
+- [docs/OPERATIONS.md](docs/OPERATIONS.md)
+
 ## What The Service Does
 
 The service handles:
