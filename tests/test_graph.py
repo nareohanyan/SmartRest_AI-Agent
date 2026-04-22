@@ -580,6 +580,81 @@ def test_armenian_least_sold_item_query_routes_to_bottom_quantity_list(
     assert "դրամ" not in final_state.final_answer
 
 
+def test_colloquial_armenian_least_revenue_item_query_routes_to_bottom_revenue_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_registry = graph_module.get_tool_registry()
+
+    class _BusinessRegistry:
+        def invoke(self, tool_id: ToolId | str, request: Any) -> Any:
+            normalized = ToolId(tool_id)
+            if normalized is ToolId.FETCH_ITEM_PERFORMANCE:
+                assert request.metric is ItemPerformanceMetric.ITEM_REVENUE
+                assert request.ranking_mode is RankingMode.BOTTOM_K
+                return ItemPerformanceResponse(
+                    metric=ItemPerformanceMetric.ITEM_REVENUE,
+                    date_from=request.date_from,
+                    date_to=request.date_to,
+                    ranking_mode=request.ranking_mode,
+                    items=[
+                        ItemPerformanceItem(menu_item_id=4, name="Թեյ", value=350),
+                    ],
+                    warnings=[],
+                )
+            return base_registry.invoke(normalized, request)
+
+    monkeypatch.setattr(graph_module, "get_tool_registry", lambda: _BusinessRegistry())
+    graph = build_agent_graph()
+    payload = _initial_state("որ ապրանքնա ամենաքիչ փողը բերում")
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.policy_route is PolicyRoute.RUN_BUSINESS_QUERY
+    assert final_state.final_answer is not None
+    assert "ամենաքիչ եկամուտ" in final_state.final_answer
+    assert "1. Թեյ — 350 դրամ" in final_state.final_answer
+
+
+def test_armenian_least_revenue_item_query_with_exclusion_passes_exclude_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_registry = graph_module.get_tool_registry()
+
+    class _BusinessRegistry:
+        def invoke(self, tool_id: ToolId | str, request: Any) -> Any:
+            normalized = ToolId(tool_id)
+            if normalized is ToolId.FETCH_ITEM_PERFORMANCE:
+                assert request.metric is ItemPerformanceMetric.ITEM_REVENUE
+                assert request.ranking_mode is RankingMode.BOTTOM_K
+                assert request.exclude_item_query == "smart_print"
+                return ItemPerformanceResponse(
+                    metric=ItemPerformanceMetric.ITEM_REVENUE,
+                    date_from=request.date_from,
+                    date_to=request.date_to,
+                    ranking_mode=request.ranking_mode,
+                    items=[
+                        ItemPerformanceItem(menu_item_id=5, name="Թեյ", value=350),
+                    ],
+                    warnings=[],
+                )
+            return base_registry.invoke(normalized, request)
+
+    monkeypatch.setattr(graph_module, "get_tool_registry", lambda: _BusinessRegistry())
+    graph = build_agent_graph()
+    payload = _initial_state(
+        "որ ապրանքնա ամենաքիչ փողը բերել նախորդ ամիս, բացի smart_print ապրանքից"
+    )
+
+    final_state = AgentState.model_validate(graph.invoke(payload))
+
+    assert final_state.status is RunStatus.COMPLETED
+    assert final_state.policy_route is PolicyRoute.RUN_BUSINESS_QUERY
+    assert final_state.final_answer is not None
+    assert "1. Թեյ — 350 դրամ" in final_state.final_answer
+    assert "smart_print" not in final_state.final_answer
+
+
 def test_compound_request_returns_partial_success_for_unsupported_task() -> None:
     graph = build_agent_graph()
     payload = _initial_state(

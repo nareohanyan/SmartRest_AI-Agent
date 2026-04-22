@@ -265,6 +265,7 @@ class ItemPerformanceRequest(SchemaModel):
     limit: int = Field(default=10, ge=1, le=50)
     ranking_mode: RankingMode = RankingMode.TOP_K
     item_query: str | None = Field(default=None, min_length=1)
+    exclude_item_query: str | None = Field(default=None, min_length=1)
     scope: RetrievalScope | None = None
 
     @model_validator(mode="after")
@@ -283,6 +284,7 @@ class BusinessQuerySpec(SchemaModel):
     date_to: date | None = None
     item_metric: ItemPerformanceMetric | None = None
     item_query: str | None = Field(default=None, min_length=1)
+    exclude_item_query: str | None = Field(default=None, min_length=1)
     limit: int = Field(default=10, ge=1, le=50)
     ranking_mode: RankingMode = RankingMode.TOP_K
 

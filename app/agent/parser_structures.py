@@ -24,6 +24,7 @@ class ParsedBusinessQuery:
     kind: BusinessQueryKind
     item_metric: ItemPerformanceMetric | None = None
     item_query: str | None = None
+    exclude_item_query: str | None = None
 
 
 @dataclass(frozen=True)

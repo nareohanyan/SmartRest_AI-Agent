@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from decimal import Decimal
 
-from sqlalchemy import String, cast, desc, func, or_, select
+from sqlalchemy import String, cast, desc, func, not_, or_, select
 from sqlalchemy.orm import Session
 
 from app.agent.services.smartrest_query_support import apply_order_filters, source_filter_clause
@@ -64,6 +64,17 @@ class LiveBusinessToolsService:
                         MenuItem.name.ilike(pattern),
                         MenuItem.name_ru.ilike(pattern),
                         MenuItem.name_en.ilike(pattern),
+                    )
+                )
+            if request.exclude_item_query is not None:
+                exclude_pattern = f"%{request.exclude_item_query.strip()}%"
+                statement = statement.where(
+                    not_(
+                        or_(
+                            MenuItem.name.ilike(exclude_pattern),
+                            MenuItem.name_ru.ilike(exclude_pattern),
+                            MenuItem.name_en.ilike(exclude_pattern),
+                        )
                     )
                 )
 

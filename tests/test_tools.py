@@ -266,6 +266,7 @@ def test_fetch_item_performance_tool_uses_live_service(
             self, request: ItemPerformanceRequest
         ) -> ItemPerformanceResponse:
             assert request.scope is not None
+            assert request.exclude_item_query == "smart_print"
             return ItemPerformanceResponse(
                 metric=request.metric,
                 date_from=request.date_from,
@@ -298,6 +299,7 @@ def test_fetch_item_performance_tool_uses_live_service(
             date_from=date(2026, 3, 1),
             date_to=date(2026, 3, 7),
             ranking_mode=RankingMode.TOP_K,
+            exclude_item_query="smart_print",
             scope=RetrievalScope(profile_id=201),
         )
     )

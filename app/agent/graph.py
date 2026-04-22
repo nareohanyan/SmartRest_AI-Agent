@@ -1015,6 +1015,7 @@ def _run_business_query_node(state: AgentState) -> dict[str, Any]:
             limit=business_query.limit,
             ranking_mode=business_query.ranking_mode,
             item_query=business_query.item_query,
+            exclude_item_query=business_query.exclude_item_query,
             scope=retrieval_scope,
         )
         started_at = perf_counter()

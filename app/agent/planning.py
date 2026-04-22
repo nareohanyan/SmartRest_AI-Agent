@@ -75,6 +75,12 @@ _ITEM_QUERY_RE = re.compile(
     r"(?:item|dish|menu item|product|ապրանք|ուտեստ|блюдо|товар)\s+"
     r"([a-zA-Z0-9\u0400-\u04FF\u0531-\u058F'’ -]{2,})"
 )
+_EXCLUDE_ITEM_QUERY_RE = re.compile(
+    r"(?:\bexcept\b|\bexcluding\b|\bwithout\b|բացի|առանց)\s+"
+    r"([\w\u0400-\u04FF\u0531-\u058F'’ -]{2,}?)"
+    r"(?=$|[,.!?։]|\s+(?:item|dish|menu item|product|ապրանք(?:ից|ի)?|ուտեստ(?:ից|ի)?|блюдо|товар))",
+    re.IGNORECASE,
+)
 _EN_NUMERIC_RELATIVE_RE = re.compile(
     r"\b(?:last|past|previous)\s+(\d{1,3})\s+"
     r"(day|days|week|weeks|month|months|year|years)\b"
@@ -515,6 +521,35 @@ def _extract_item_query(question: str) -> str | None:
     return extracted
 
 
+def _clean_item_name(raw_value: str) -> str | None:
+    cleaned = raw_value.strip(" .,!?:;։")
+    cleaned = re.sub(
+        r"\s+(?:item|dish|menu item|product|ապրանք(?:ից|ի)?|ուտեստ(?:ից|ի)?|блюдо|товар)$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip(" -")
+    cleaned = re.sub(r"-(?:ից|ի)$", "", cleaned).strip()
+    if len(cleaned) < 2:
+        return None
+    return cleaned
+
+
+def _extract_exclude_item_query(question: str) -> str | None:
+    quote_match = re.search(
+        r"(?:\bexcept\b|\bexcluding\b|\bwithout\b|բացի|առանց)\s+[\"“](.+?)[\"”]",
+        question,
+        re.IGNORECASE,
+    )
+    if quote_match:
+        return _clean_item_name(quote_match.group(1))
+
+    match = _EXCLUDE_ITEM_QUERY_RE.search(question)
+    if not match:
+        return None
+    return _clean_item_name(match.group(1))
+
+
 def _parse_question(question: str) -> ParsedQuestion:
     normalized = _normalize_question_text(question)
     date_range = _parse_date_range(question)
@@ -537,6 +572,7 @@ def _parse_question(question: str) -> ParsedQuestion:
             kind=BusinessQueryKind.ITEM_PERFORMANCE,
             item_metric=_detect_item_metric(question),
             item_query=_extract_item_query(question),
+            exclude_item_query=_extract_exclude_item_query(question),
         )
     elif _is_customer_business_query(question):
         business_query = ParsedBusinessQuery(kind=BusinessQueryKind.CUSTOMER_SUMMARY)
@@ -590,6 +626,7 @@ def _build_business_plan(parsed: ParsedQuestion) -> AnalysisPlan | None:
                 date_to=date_to,
                 item_metric=item_metric,
                 item_query=parsed.business_query.item_query,
+                exclude_item_query=parsed.business_query.exclude_item_query,
                 limit=parsed.ranking_k,
                 ranking_mode=parsed.ranking_mode or RankingMode.TOP_K,
             ),

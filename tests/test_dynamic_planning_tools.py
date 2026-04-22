@@ -356,6 +356,38 @@ def test_no_date_item_revenue_query_defaults_to_overall_history() -> None:
     assert plan.business_query.limit == 1
 
 
+def test_colloquial_armenian_least_revenue_item_query_routes_to_bottom_item_revenue() -> None:
+    plan = plan_analysis("որ ապրանքնա ամենաքիչ փողը բերում")
+
+    assert plan.business_query is not None
+    assert plan.business_query.kind is BusinessQueryKind.ITEM_PERFORMANCE
+    assert plan.business_query.item_metric is ItemPerformanceMetric.ITEM_REVENUE
+    assert plan.business_query.ranking_mode is RankingMode.BOTTOM_K
+    assert plan.business_query.date_from is None
+    assert plan.business_query.date_to is None
+    assert plan.business_query.limit == 1
+
+
+def test_armenian_item_revenue_query_with_exclusion_routes_to_bottom_item_revenue() -> None:
+    today = date.today()
+    current_month_start = today.replace(day=1)
+    previous_month_end = current_month_start - date.resolution
+    previous_month_start = previous_month_end.replace(day=1)
+
+    plan = plan_analysis(
+        "որ ապրանքնա ամենաքիչ փողը բերել նախորդ ամիս, բացի smart_print ապրանքից"
+    )
+
+    assert plan.business_query is not None
+    assert plan.business_query.kind is BusinessQueryKind.ITEM_PERFORMANCE
+    assert plan.business_query.item_metric is ItemPerformanceMetric.ITEM_REVENUE
+    assert plan.business_query.exclude_item_query == "smart_print"
+    assert plan.business_query.ranking_mode is RankingMode.BOTTOM_K
+    assert plan.business_query.date_from == previous_month_start
+    assert plan.business_query.date_to == previous_month_end
+    assert plan.business_query.limit == 1
+
+
 def test_relative_russian_two_weeks_is_mapped_to_fourteen_days() -> None:
     today = date.today()
     plan = plan_analysis("Покажи продажи за последние 2 недели")

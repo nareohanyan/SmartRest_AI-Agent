@@ -361,7 +361,7 @@ def _format_item_value(
         )
         return f"{quantized}{suffix}"
     suffix = " դրամ" if language == "hy" else (" драм" if language == "ru" else "")
-    return f"{value:.2f}{suffix}"
+    return f"{_format_decimal(value, fraction_digits=2)}{suffix}"
 
 
 def _format_period_label(*, date_from: object, date_to: object, language: str) -> str:
@@ -402,11 +402,16 @@ def _build_item_performance_summary(
         )
 
     metric_label = _item_metric_label(response.metric, language, business_query.ranking_mode)
+    period_prefix_hy = (
+        f"{period_label} ժամանակահատվածում"
+        if business_query.date_from is not None and business_query.date_to is not None
+        else period_label
+    )
     if language == "hy":
         if business_query.ranking_mode is RankingMode.TOP_K:
-            header = f"{period_label} ժամանակահատվածում ամենաուժեղ արդյունք ունեցած {len(response.items)} {metric_label} հետևյալն են."
+            header = f"{period_prefix_hy} ամենաուժեղ արդյունք ունեցած {len(response.items)} {metric_label} հետևյալն են."
         else:
-            header = f"{period_label} ժամանակահատվածում ամենացածր արդյունք ունեցած {len(response.items)} {metric_label} հետևյալն են."
+            header = f"{period_prefix_hy} ամենացածր արդյունք ունեցած {len(response.items)} {metric_label} հետևյալն են."
     elif language == "ru":
         ranking_label = "топ" if business_query.ranking_mode is RankingMode.TOP_K else "последние"
         header = f"Вот {ranking_label} {len(response.items)} {metric_label} {period_label}."
