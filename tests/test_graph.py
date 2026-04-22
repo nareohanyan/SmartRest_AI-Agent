@@ -346,7 +346,8 @@ def test_supported_request_executes_legacy_report_path() -> None:
     assert final_state.status is RunStatus.COMPLETED
     assert final_state.selected_report_id is ReportType.SALES_TOTAL
     assert final_state.tool_responses.run_report is not None
-    assert "sales_total=12345.67" in (final_state.final_answer or "")
+    assert "total sales" in (final_state.final_answer or "").lower()
+    assert "12,345.67" in (final_state.final_answer or "")
 
 
 def test_hy_supported_request_executes_legacy_report_path() -> None:
@@ -370,6 +371,10 @@ def test_hy_supported_request_executes_legacy_report_path() -> None:
     ]
     assert final_state.status is RunStatus.COMPLETED
     assert final_state.selected_report_id is ReportType.SALES_TOTAL
+    assert final_state.final_answer is not None
+    assert "ընդհանուր վաճառքը" in final_state.final_answer
+    assert "12,345.67 դրամ" in final_state.final_answer
+    assert "sales_total" not in final_state.final_answer
 
 
 def test_ru_comparison_routes_to_dynamic_comparison_path() -> None:
@@ -418,7 +423,8 @@ def test_new_total_metric_routes_to_dynamic_total_path() -> None:
     assert final_state.status is RunStatus.COMPLETED
     assert final_state.policy_route is PolicyRoute.RUN_TOTAL
     assert final_state.final_answer is not None
-    assert "quantity_sold" in final_state.final_answer
+    assert "Quantity sold" in final_state.final_answer
+    assert "1,100" in final_state.final_answer
 
 
 def test_build_retrieval_scope_uses_requested_branch_ids_when_present() -> None:
@@ -531,7 +537,7 @@ def test_armenian_top_selling_items_answer_is_ranked_quantity_list(
     assert final_state.status is RunStatus.COMPLETED
     assert final_state.policy_route is PolicyRoute.RUN_BUSINESS_QUERY
     assert final_state.final_answer is not None
-    assert "Ահա" in final_state.final_answer
+    assert "հետևյալն են" in final_state.final_answer
     assert "1. Լահմաջո պանրով — 123 հատ" in final_state.final_answer
     assert "2. Լահմաջո — 100 հատ" in final_state.final_answer
     assert "դրամ" not in final_state.final_answer

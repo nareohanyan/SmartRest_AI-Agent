@@ -36,9 +36,16 @@ from app.agent.planning import (
 from app.agent.planning_policy import evaluate_business_query_policy, evaluate_plan_policy
 from app.agent.response_text import (
     _access_denied_answer,
+    _build_breakdown_summary,
+    _build_comparison_summary,
+    _build_customer_summary,
     _build_item_performance_summary,
+    _build_receipt_summary,
+    _build_report_result_summary,
+    _build_total_summary,
+    _build_trend_summary,
+    _build_unsupported_task_fragment,
     _clarification_fallback_question,
-    _format_period_label,
     _question_language,
     _safe_unsupported_answer,
     _smalltalk_answer,
@@ -419,63 +426,17 @@ def _run_report_node(state: AgentState) -> dict[str, Any]:
     }
 
 
-def _format_metric_value(value: float) -> str:
-    return f"{value:.2f}"
-
-
 def _build_legacy_task_fragment(
     *,
-    task: LegacyReportTask,
     run_response: Any,
     derived_metrics: dict[str, Decimal],
+    language: str,
 ) -> str:
-    report_id = run_response.result.report_id
-    date_from = run_response.result.filters.date_from
-    date_to = run_response.result.filters.date_to
-    metrics = {metric.label: metric.value for metric in run_response.result.metrics}
-
-    if report_id is ReportType.SALES_TOTAL:
-        sales_total = metrics.get("sales_total")
-        per_day = derived_metrics.get("sales_total_per_day")
-        if sales_total is not None:
-            fragment = (
-                f"Total sales from {date_from} to {date_to} were "
-                f"{_format_metric_value(sales_total)}."
-            )
-            if per_day is not None:
-                fragment = (
-                    f"{fragment} Average per day was {per_day:.2f}."
-                )
-            return fragment
-
-    if report_id is ReportType.ORDER_COUNT:
-        order_count = metrics.get("order_count")
-        per_day = derived_metrics.get("order_count_per_day")
-        if order_count is not None:
-            fragment = (
-                f"Order count from {date_from} to {date_to} was "
-                f"{_format_metric_value(order_count)}."
-            )
-            if per_day is not None:
-                fragment = f"{fragment} Average per day was {per_day:.2f}."
-            return fragment
-
-    if report_id is ReportType.AVERAGE_CHECK:
-        average_check = metrics.get("average_check")
-        if average_check is not None:
-            return (
-                f"Average check from {date_from} to {date_to} was "
-                f"{_format_metric_value(average_check)}."
-            )
-
-    metrics_text = ", ".join(
-        f"{metric.label}={metric.value:.2f}" for metric in run_response.result.metrics
+    return _build_report_result_summary(
+        result=run_response.result,
+        derived_metrics=derived_metrics,
+        language=language,
     )
-    return f"Report {report_id.value} for {date_from} to {date_to}: {metrics_text}."
-
-
-def _build_unsupported_task_fragment(task: LegacyReportTask) -> str:
-    return f"I couldn't answer '{task.user_subquery}' because that metric is not supported yet."
 
 
 def _run_multi_report_node(state: AgentState) -> dict[str, Any]:
@@ -490,6 +451,7 @@ def _run_multi_report_node(state: AgentState) -> dict[str, Any]:
     execution_trace = list(state.execution_trace)
     task_results: list[LegacyReportTaskResult] = []
     summary_parts: list[str] = []
+    language = _question_language(state.user_question)
 
     for task in state.legacy_tasks:
         if (
@@ -498,7 +460,10 @@ def _run_multi_report_node(state: AgentState) -> dict[str, Any]:
             or task.date_from is None
             or task.date_to is None
         ):
-            fragment = _build_unsupported_task_fragment(task)
+            fragment = _build_unsupported_task_fragment(
+                user_subquery=task.user_subquery,
+                language=language,
+            )
             task_results.append(
                 LegacyReportTaskResult(
                     task_id=task.task_id,
@@ -566,9 +531,9 @@ def _run_multi_report_node(state: AgentState) -> dict[str, Any]:
             }
 
         fragment = _build_legacy_task_fragment(
-            task=task,
             run_response=run_response,
             derived_metrics=derived_metric_values,
+            language=language,
         )
         task_results.append(
             LegacyReportTaskResult(
@@ -726,23 +691,18 @@ def _run_comparison_node(state: AgentState) -> dict[str, Any]:
         derived_metrics = []
         calc_warnings = []
 
-    summary = (
-        f"Comparison for {plan.retrieval.metric.value} "
-        f"({plan.retrieval.date_from} to {plan.retrieval.date_to}) vs previous period "
-        f"({plan.previous_period_retrieval.date_from} "
-        f"to {plan.previous_period_retrieval.date_to}): "
-        f"current={current.value:.2f}, previous={previous.value:.2f}."
+    language = _question_language(state.user_question)
+    summary = _build_comparison_summary(
+        metric=plan.retrieval.metric,
+        current_value=current.value,
+        previous_value=previous.value,
+        date_from=plan.retrieval.date_from,
+        date_to=plan.retrieval.date_to,
+        previous_date_from=plan.previous_period_retrieval.date_from,
+        previous_date_to=plan.previous_period_retrieval.date_to,
+        derived_metrics=derived_metrics,
+        language=language,
     )
-    if derived_metrics:
-        derived_summary = ", ".join(
-            (
-                f"{metric.key}={metric.value:.2f}"
-                if metric.value is not None
-                else f"{metric.key}=n/a"
-            )
-            for metric in derived_metrics
-        )
-        summary = f"{summary} Derived metrics: {derived_summary}."
 
     calc_warning_strings = [f"calc:{warning.value}" for warning in calc_warnings]
     return {
@@ -814,26 +774,15 @@ def _run_total_node(state: AgentState) -> dict[str, Any]:
         derived_metrics = []
         calc_warnings = []
 
-    period_label = _format_period_label(
+    language = _question_language(state.user_question)
+    summary = _build_total_summary(
+        metric=plan.retrieval.metric,
+        value=response.value,
         date_from=plan.retrieval.date_from,
         date_to=plan.retrieval.date_to,
-        language="en",
+        derived_metrics=derived_metrics,
+        language=language,
     )
-    summary = (
-        f"Total for {plan.retrieval.metric.value} "
-        f"({period_label}): "
-        f"value={response.value:.2f}."
-    )
-    if derived_metrics:
-        derived_summary = ", ".join(
-            (
-                f"{metric.key}={metric.value:.2f}"
-                if metric.value is not None
-                else f"{metric.key}=n/a"
-            )
-            for metric in derived_metrics
-        )
-        summary = f"{summary} Derived metrics: {derived_summary}."
 
     calc_warning_strings = [f"calc:{warning.value}" for warning in calc_warnings]
     return {
@@ -919,16 +868,15 @@ def _run_ranking_node(state: AgentState) -> dict[str, Any]:
                 started_at=ranking_started_at,
             )
 
-    summary_items = ", ".join(f"{item.label}={item.value:.2f}" for item in ranked_items)
-    summary_prefix = "Ranking" if plan.intent is AnalysisIntent.RANKING else "Breakdown"
-    period_label = _format_period_label(
+    language = _question_language(state.user_question)
+    summary = _build_breakdown_summary(
+        metric=plan.retrieval.metric,
+        dimension=requested_dimension,
+        items=ranked_items,
         date_from=plan.retrieval.date_from,
         date_to=plan.retrieval.date_to,
-        language="en",
-    )
-    summary = (
-        f"{summary_prefix} for {plan.retrieval.metric.value} by {requested_dimension.value} "
-        f"({period_label}): {summary_items}."
+        language=language,
+        ranking_mode=plan.ranking.mode if plan.intent is AnalysisIntent.RANKING and plan.ranking else None,
     )
 
     return {
@@ -972,12 +920,9 @@ def _run_trend_node(state: AgentState) -> dict[str, Any]:
         warnings=_stringify_tool_warnings(timeseries.warnings),
     )
 
-    period_label = _format_period_label(
-        date_from=plan.retrieval.date_from,
-        date_to=plan.retrieval.date_to,
-        language="en",
-    )
-    summary_parts = [f"Trend for {plan.retrieval.metric.value} ({period_label})."]
+    latest_moving_average: Decimal | None = None
+    slope_per_day: Decimal | None = None
+    slope_direction: str | None = None
 
     if plan.include_moving_average and len(timeseries.points) >= plan.moving_average_window:
         moving_average_request = MovingAverageRequest(
@@ -999,9 +944,7 @@ def _run_trend_node(state: AgentState) -> dict[str, Any]:
             None,
         )
         if latest_ma is not None:
-            summary_parts.append(
-                f"Latest {plan.moving_average_window}-day moving average: {latest_ma:.2f}."
-            )
+            latest_moving_average = latest_ma
 
     if plan.include_trend_slope:
         if len(timeseries.points) >= 2:
@@ -1016,17 +959,27 @@ def _run_trend_node(state: AgentState) -> dict[str, Any]:
                 started_at=trend_slope_started_at,
                 warnings=_stringify_tool_warnings(slope.warnings),
             )
-            summary_parts.append(
-                f"Slope per day: {slope.slope_per_day:.4f} ({slope.direction})."
-            )
-        else:
-            summary_parts.append("Not enough points for slope calculation.")
+            slope_per_day = slope.slope_per_day
+            slope_direction = slope.direction
+
+    language = _question_language(state.user_question)
+    summary = _build_trend_summary(
+        metric=plan.retrieval.metric,
+        points=timeseries.points,
+        date_from=plan.retrieval.date_from,
+        date_to=plan.retrieval.date_to,
+        moving_average_window=plan.moving_average_window if plan.include_moving_average else None,
+        latest_moving_average=latest_moving_average,
+        slope_per_day=slope_per_day,
+        slope_direction=slope_direction,
+        language=language,
+    )
 
     return {
         "analysis_artifacts": {
             **state.analysis_artifacts,
             "kind": "trend",
-            "summary": " ".join(summary_parts),
+            "summary": summary,
         },
         "warnings": [*state.warnings, *_stringify_tool_warnings(timeseries.warnings)],
         "execution_trace": execution_trace,
@@ -1103,18 +1056,14 @@ def _run_business_query_node(state: AgentState) -> dict[str, Any]:
             output_ref="customer_summary_response",
             started_at=started_at,
         )
-        period_label = _format_period_label(
+        summary = _build_customer_summary(
             date_from=business_query.date_from,
             date_to=business_query.date_to,
-            language="en",
-        )
-        summary = (
-            f"Customer summary {period_label}: "
-            f"unique_clients={response.unique_clients}, "
-            f"identified_order_count={response.identified_order_count}, "
-            f"total_order_count={response.total_order_count}, "
-            f"average_orders_per_identified_client="
-            f"{response.average_orders_per_identified_client:.2f}."
+            unique_clients=response.unique_clients,
+            identified_order_count=response.identified_order_count,
+            total_order_count=response.total_order_count,
+            average_orders_per_identified_client=response.average_orders_per_identified_client,
+            language=language,
         )
         return {
             "analysis_artifacts": {
@@ -1140,19 +1089,13 @@ def _run_business_query_node(state: AgentState) -> dict[str, Any]:
         output_ref="receipt_summary_response",
         started_at=started_at,
     )
-    status_summary = ", ".join(
-        f"{status}={count}" for status, count in sorted(response.status_counts.items())
-    ) or "no receipt statuses found"
-    period_label = _format_period_label(
+    summary = _build_receipt_summary(
         date_from=business_query.date_from,
         date_to=business_query.date_to,
-        language="en",
-    )
-    summary = (
-        f"Receipt summary {period_label}: "
-        f"receipt_count={response.receipt_count}, "
-        f"linked_order_count={response.linked_order_count}, "
-        f"statuses: {status_summary}."
+        receipt_count=response.receipt_count,
+        linked_order_count=response.linked_order_count,
+        status_counts=response.status_counts,
+        language=language,
     )
     return {
         "analysis_artifacts": {
@@ -1268,23 +1211,16 @@ def _smalltalk_node(state: AgentState) -> dict[str, Any]:
 def _compose_answer_node(state: AgentState) -> dict[str, Any]:
     run_response = state.tool_responses.run_report
     if run_response is not None:
-        metrics_text = ", ".join(
-            f"{metric.label}={metric.value:.2f}" for metric in run_response.result.metrics
-        )
-        derived_text = ", ".join(
-            (
-                f"{metric.key}={metric.value:.2f}"
-                if metric.value is not None
-                else f"{metric.key}=n/a"
-            )
+        language = _question_language(state.user_question)
+        derived_metric_values = {
+            metric.key: metric.value
             for metric in state.derived_metrics
-        )
-        derived_suffix = f" Derived metrics: {derived_text}." if derived_text else ""
-        final_answer = (
-            f"Report {run_response.result.report_id.value} "
-            f"for {run_response.result.filters.date_from} "
-            f"to {run_response.result.filters.date_to}: "
-            f"{metrics_text}.{derived_suffix}"
+            if metric.value is not None
+        }
+        final_answer = _build_report_result_summary(
+            result=run_response.result,
+            derived_metrics=derived_metric_values,
+            language=language,
         )
         rendered_answer, warnings = _render_answer_with_llm(
             state=state,

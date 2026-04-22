@@ -104,6 +104,7 @@ def _render_answer_with_llm(
         messages = build_response_messages(
             {
                 "route": route,
+                "answer_kind": state.analysis_artifacts.get("kind"),
                 "language_hint": _question_language(state.user_question),
                 "user_question": state.user_question,
                 "factual_answer": fallback_answer,
