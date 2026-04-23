@@ -1,0 +1,882 @@
+{
+  "document": {
+    "title": "SmartRest Production Metric Registry and Dynamic Planning Blueprint",
+    "version": "1.1.0",
+    "created_at": "2026-03-24",
+    "purpose": "A structured blueprint explaining how to model a production analytics agent using a small canonical metric registry, stable dimensions, bounded analytical operations, and dynamic planning over those stable business semantics."
+  },
+  "core_principle": {
+    "summary": "Do not define every possible user question. Define a small, governed system of business metrics, dimensions, and analytical operations. Let the planner dynamically compose them.",
+    "wrong_model": {
+      "name": "Dynamic metric invention",
+      "description": "The LLM invents new business metrics on the fly from user phrasing.",
+      "why_it_fails": [
+        "Different runs may produce different meanings for the same business term.",
+        "Permission enforcement becomes unclear and fragile.",
+        "Testing and debugging become extremely difficult.",
+        "Numbers may drift away from dashboards and official definitions.",
+        "Business trust drops when definitions are unstable."
+      ]
+    },
+    "right_model": {
+      "name": "Dynamic planning over stable semantics",
+      "description": "Metrics, dimensions, and formulas are predefined and governed. The planner dynamically chooses which approved semantics and operations to compose for a given request.",
+      "benefits": [
+        "Stable business definitions",
+        "Deterministic calculations",
+        "Clear permission boundaries",
+        "Better observability and testing",
+        "Scalable request coverage without metric explosion"
+      ]
+    }
+  },
+  "three_layers": {
+    "base_metrics": {
+      "definition": "Canonical business facts that come directly from trusted data sources and have stable meaning.",
+      "examples": [
+        "gross_sales",
+        "net_sales",
+        "order_count",
+        "refund_amount",
+        "discount_amount"
+      ]
+    },
+    "derived_metrics": {
+      "definition": "Metrics defined as stable formulas over base metrics.",
+      "examples": [
+        "average_check = net_sales / completed_order_count",
+        "refund_rate = refund_amount / net_sales",
+        "discount_share = discount_amount / gross_sales"
+      ]
+    },
+    "dynamic_analyses": {
+      "definition": "Planner-driven combinations of existing metrics with dimensions, time windows, and operations.",
+      "examples": [
+        "sales by source last month",
+        "average check trend by day",
+        "top 5 branches by order count",
+        "compare current month vs previous month by source"
+      ]
+    }
+  },
+  "design_rules": [
+    "Keep core business metric definitions stable and versioned.",
+    "Separate metric definitions from dynamic analytical operations.",
+    "Treat dimensions as a separate governed registry.",
+    "Map user language to canonical metrics and dimensions through aliases.",
+    "Perform calculations in tools, not inside free-form model reasoning.",
+    "Use dynamic planning to compose approved operations, not invent semantics.",
+    "Attach permissions to scope, metrics, dimensions, and operations.",
+    "Make every analytical step observable and testable."
+  ],
+  "canonical_decisions": {
+    "average_check_definition": {
+      "canonical_formula": "net_sales / completed_order_count",
+      "definition_version": "v2",
+      "business_meaning": "Average realized sales per completed order.",
+      "inclusion_rules": [
+        "Include only completed orders in denominator.",
+        "Exclude canceled orders from denominator.",
+        "Refund handling stays in net_sales numerator.",
+        "If completed_order_count is zero, return null and emit division-by-zero warning."
+      ],
+      "transition_note": "Current runtime may still use sales_total / order_count. Migrate with explicit versioning and dashboard parity checks."
+    }
+  },
+  "operation_vocabulary": {
+    "principle": "Planner uses semantic operations; runtime uses explicit executable tool operations. Mapping is mandatory and versioned.",
+    "semantic_planning_operations": [
+      "total",
+      "breakdown",
+      "timeseries",
+      "compare",
+      "rank",
+      "share",
+      "trend"
+    ],
+    "runtime_execution_operations": [
+      "resolve_scope",
+      "run_report",
+      "compute_scalar_metrics",
+      "fetch_total_metric",
+      "fetch_breakdown",
+      "fetch_timeseries",
+      "attach_breakdown_share",
+      "top_k",
+      "bottom_k",
+      "moving_average",
+      "trend_slope"
+    ],
+    "semantic_to_runtime_mapping": [
+      {
+        "semantic_op": "total",
+        "runtime_ops": [
+          "fetch_total_metric"
+        ]
+      },
+      {
+        "semantic_op": "breakdown",
+        "runtime_ops": [
+          "fetch_breakdown"
+        ]
+      },
+      {
+        "semantic_op": "timeseries",
+        "runtime_ops": [
+          "fetch_timeseries"
+        ]
+      },
+      {
+        "semantic_op": "compare",
+        "runtime_ops": [
+          "fetch_total_metric",
+          "compute_scalar_metrics"
+        ]
+      },
+      {
+        "semantic_op": "rank",
+        "runtime_ops": [
+          "fetch_breakdown",
+          "top_k",
+          "bottom_k"
+        ]
+      },
+      {
+        "semantic_op": "share",
+        "runtime_ops": [
+          "attach_breakdown_share"
+        ]
+      },
+      {
+        "semantic_op": "trend",
+        "runtime_ops": [
+          "fetch_timeseries",
+          "moving_average",
+          "trend_slope"
+        ]
+      }
+    ],
+    "trust_operations": [
+      "check_freshness",
+      "check_data_quality",
+      "emit_warnings"
+    ]
+  },
+  "starter_dimension_registry": [
+    {
+      "id": "branch",
+      "label": "Branch",
+      "description": "Restaurant branch or location.",
+      "aliases": [
+        "branch",
+        "location",
+        "restaurant",
+        "store",
+        "filial"
+      ],
+      "permission_class": "branch_scope"
+    },
+    {
+      "id": "source",
+      "label": "Source",
+      "description": "Order source or channel, such as dine-in or delivery partners.",
+      "aliases": [
+        "source",
+        "channel",
+        "delivery source",
+        "partner",
+        "platform"
+      ],
+      "permission_class": "standard_dimension"
+    },
+    {
+      "id": "day",
+      "label": "Day",
+      "description": "Calendar day grain.",
+      "aliases": [
+        "day",
+        "date",
+        "daily"
+      ],
+      "permission_class": "standard_dimension"
+    },
+    {
+      "id": "hour",
+      "label": "Hour",
+      "description": "Hour of day grain.",
+      "aliases": [
+        "hour",
+        "hourly",
+        "time of day"
+      ],
+      "permission_class": "standard_dimension"
+    },
+    {
+      "id": "weekday",
+      "label": "Weekday",
+      "description": "Day of week dimension.",
+      "aliases": [
+        "weekday",
+        "day of week"
+      ],
+      "permission_class": "standard_dimension"
+    },
+    {
+      "id": "payment_method",
+      "label": "Payment Method",
+      "description": "Payment type used in the transaction.",
+      "aliases": [
+        "payment method",
+        "payment type",
+        "card or cash",
+        "payment"
+      ],
+      "permission_class": "sensitive_operational_dimension"
+    },
+    {
+      "id": "category",
+      "label": "Category",
+      "description": "Menu category or product grouping.",
+      "aliases": [
+        "category",
+        "product category",
+        "menu category"
+      ],
+      "permission_class": "standard_dimension"
+    },
+    {
+      "id": "cashier",
+      "label": "Cashier",
+      "description": "Operator or cashier dimension.",
+      "aliases": [
+        "cashier",
+        "operator",
+        "employee"
+      ],
+      "permission_class": "sensitive_people_dimension"
+    }
+  ],
+  "dimension_value_governance": {
+    "principle": "Dimension aliases resolve dimension IDs. Separate normalization rules resolve dimension values.",
+    "value_domains": [
+      {
+        "dimension_id": "source",
+        "canonical_values": [
+          "in_store",
+          "takeaway",
+          "glovo",
+          "wolt",
+          "yandex"
+        ],
+        "normalization_rules": [
+          {
+            "input_aliases": [
+              "in store",
+              "in-store",
+              "dine in",
+              "hall"
+            ],
+            "canonical_value": "in_store"
+          },
+          {
+            "input_aliases": [
+              "take away",
+              "pickup"
+            ],
+            "canonical_value": "takeaway"
+          }
+        ],
+        "deprecated_values": [
+          "direct"
+        ]
+      },
+      {
+        "dimension_id": "payment_method",
+        "canonical_values": [
+          "cash",
+          "card",
+          "qr",
+          "online_card"
+        ],
+        "normalization_rules": [
+          {
+            "input_aliases": [
+              "credit card",
+              "bank card",
+              "visa",
+              "mastercard"
+            ],
+            "canonical_value": "card"
+          }
+        ],
+        "deprecated_values": []
+      },
+      {
+        "dimension_id": "branch",
+        "canonical_values_source": "operational.branch_registry",
+        "normalization_rules": [],
+        "deprecated_values": []
+      }
+    ]
+  },
+  "starter_metric_registry": [
+    {
+      "id": "gross_sales",
+      "label": "Gross Sales",
+      "type": "base",
+      "description": "Total sales amount before discounts and refunds.",
+      "default_aggregation": "sum",
+      "formula": null,
+      "unit": "currency",
+      "allowed_dimensions": [
+        "branch",
+        "source",
+        "day",
+        "hour",
+        "weekday",
+        "category",
+        "payment_method"
+      ],
+      "allowed_grains": [
+        "day",
+        "week",
+        "month"
+      ],
+      "aliases": [
+        "gross sales",
+        "sales before discounts",
+        "total gross revenue"
+      ],
+      "permission_class": "financial_core"
+    },
+    {
+      "id": "net_sales",
+      "label": "Net Sales",
+      "type": "base",
+      "description": "Total realized sales amount after discounts and refunds.",
+      "default_aggregation": "sum",
+      "formula": null,
+      "unit": "currency",
+      "allowed_dimensions": [
+        "branch",
+        "source",
+        "day",
+        "hour",
+        "weekday",
+        "category",
+        "payment_method"
+      ],
+      "allowed_grains": [
+        "day",
+        "week",
+        "month"
+      ],
+      "aliases": [
+        "net sales",
+        "sales",
+        "real sales",
+        "revenue"
+      ],
+      "permission_class": "financial_core"
+    },
+    {
+      "id": "order_count",
+      "label": "Order Count",
+      "type": "base",
+      "description": "Number of completed orders.",
+      "default_aggregation": "sum",
+      "formula": null,
+      "unit": "count",
+      "allowed_dimensions": [
+        "branch",
+        "source",
+        "day",
+        "hour",
+        "weekday",
+        "category",
+        "payment_method",
+        "cashier"
+      ],
+      "allowed_grains": [
+        "day",
+        "week",
+        "month"
+      ],
+      "aliases": [
+        "order count",
+        "orders",
+        "completed orders",
+        "transactions"
+      ],
+      "permission_class": "operational_core"
+    },
+    {
+      "id": "completed_order_count",
+      "label": "Completed Order Count",
+      "type": "base",
+      "description": "Number of orders successfully completed.",
+      "default_aggregation": "sum",
+      "formula": null,
+      "unit": "count",
+      "allowed_dimensions": [
+        "branch",
+        "source",
+        "day",
+        "hour",
+        "weekday",
+        "cashier"
+      ],
+      "allowed_grains": [
+        "day",
+        "week",
+        "month"
+      ],
+      "aliases": [
+        "completed orders",
+        "finished orders"
+      ],
+      "permission_class": "operational_core"
+    },
+    {
+      "id": "canceled_order_count",
+      "label": "Canceled Order Count",
+      "type": "base",
+      "description": "Number of orders canceled before completion.",
+      "default_aggregation": "sum",
+      "formula": null,
+      "unit": "count",
+      "allowed_dimensions": [
+        "branch",
+        "source",
+        "day",
+        "hour",
+        "weekday",
+        "cashier"
+      ],
+      "allowed_grains": [
+        "day",
+        "week",
+        "month"
+      ],
+      "aliases": [
+        "canceled orders",
+        "cancel count",
+        "order cancellations"
+      ],
+      "permission_class": "operational_sensitive"
+    },
+    {
+      "id": "refund_amount",
+      "label": "Refund Amount",
+      "type": "base",
+      "description": "Total amount refunded to customers.",
+      "default_aggregation": "sum",
+      "formula": null,
+      "unit": "currency",
+      "allowed_dimensions": [
+        "branch",
+        "source",
+        "day",
+        "hour",
+        "weekday",
+        "payment_method"
+      ],
+      "allowed_grains": [
+        "day",
+        "week",
+        "month"
+      ],
+      "aliases": [
+        "refund amount",
+        "refunds",
+        "returned money"
+      ],
+      "permission_class": "financial_sensitive"
+    },
+    {
+      "id": "discount_amount",
+      "label": "Discount Amount",
+      "type": "base",
+      "description": "Total amount discounted from gross sales.",
+      "default_aggregation": "sum",
+      "formula": null,
+      "unit": "currency",
+      "allowed_dimensions": [
+        "branch",
+        "source",
+        "day",
+        "hour",
+        "weekday",
+        "category"
+      ],
+      "allowed_grains": [
+        "day",
+        "week",
+        "month"
+      ],
+      "aliases": [
+        "discount amount",
+        "discounts",
+        "promo discounts"
+      ],
+      "permission_class": "financial_core"
+    },
+    {
+      "id": "delivery_order_count",
+      "label": "Delivery Order Count",
+      "type": "base",
+      "description": "Number of delivery channel orders.",
+      "default_aggregation": "sum",
+      "formula": null,
+      "unit": "count",
+      "allowed_dimensions": [
+        "branch",
+        "source",
+        "day",
+        "hour",
+        "weekday"
+      ],
+      "allowed_grains": [
+        "day",
+        "week",
+        "month"
+      ],
+      "aliases": [
+        "delivery orders",
+        "delivery count"
+      ],
+      "permission_class": "operational_core"
+    },
+    {
+      "id": "dine_in_order_count",
+      "label": "Dine-In Order Count",
+      "type": "base",
+      "description": "Number of dine-in orders.",
+      "default_aggregation": "sum",
+      "formula": null,
+      "unit": "count",
+      "allowed_dimensions": [
+        "branch",
+        "day",
+        "hour",
+        "weekday",
+        "cashier"
+      ],
+      "allowed_grains": [
+        "day",
+        "week",
+        "month"
+      ],
+      "aliases": [
+        "dine in orders",
+        "hall orders",
+        "in-store orders"
+      ],
+      "permission_class": "operational_core"
+    },
+    {
+      "id": "average_check",
+      "label": "Average Check",
+      "type": "derived",
+      "description": "Average net sales per completed order.",
+      "default_aggregation": "derived",
+      "formula": "net_sales / completed_order_count",
+      "formula_ast": {
+        "kind": "ratio",
+        "numerator": "net_sales",
+        "denominator": "completed_order_count"
+      },
+      "definition_version": "v2",
+      "inclusion_rules": [
+        "Denominator includes only completed orders.",
+        "Canceled orders are excluded from denominator."
+      ],
+      "unit": "currency",
+      "allowed_dimensions": [
+        "branch",
+        "source",
+        "day",
+        "hour",
+        "weekday",
+        "category",
+        "payment_method"
+      ],
+      "allowed_grains": [
+        "day",
+        "week",
+        "month"
+      ],
+      "aliases": [
+        "average check",
+        "avg check",
+        "average order value",
+        "aov"
+      ],
+      "permission_class": "financial_core",
+      "dependencies": [
+        "net_sales",
+        "completed_order_count"
+      ]
+    },
+    {
+      "id": "refund_rate",
+      "label": "Refund Rate",
+      "type": "derived",
+      "description": "Refund amount as a share of net sales.",
+      "default_aggregation": "derived",
+      "formula": "refund_amount / net_sales",
+      "formula_ast": {
+        "kind": "ratio",
+        "numerator": "refund_amount",
+        "denominator": "net_sales"
+      },
+      "unit": "ratio",
+      "allowed_dimensions": [
+        "branch",
+        "source",
+        "day",
+        "weekday",
+        "payment_method"
+      ],
+      "allowed_grains": [
+        "day",
+        "week",
+        "month"
+      ],
+      "aliases": [
+        "refund rate",
+        "refund share"
+      ],
+      "permission_class": "financial_sensitive",
+      "dependencies": [
+        "refund_amount",
+        "net_sales"
+      ]
+    },
+    {
+      "id": "discount_share",
+      "label": "Discount Share",
+      "type": "derived",
+      "description": "Discount amount as a share of gross sales.",
+      "default_aggregation": "derived",
+      "formula": "discount_amount / gross_sales",
+      "formula_ast": {
+        "kind": "ratio",
+        "numerator": "discount_amount",
+        "denominator": "gross_sales"
+      },
+      "unit": "ratio",
+      "allowed_dimensions": [
+        "branch",
+        "source",
+        "day",
+        "weekday",
+        "category"
+      ],
+      "allowed_grains": [
+        "day",
+        "week",
+        "month"
+      ],
+      "aliases": [
+        "discount share",
+        "discount rate"
+      ],
+      "permission_class": "financial_core",
+      "dependencies": [
+        "discount_amount",
+        "gross_sales"
+      ]
+    }
+  ],
+  "formula_contract": {
+    "principle": "Formula strings are human-readable documentation. Runtime execution must use validated machine-safe formula structures.",
+    "documentation_field": "formula",
+    "executable_field": "formula_ast",
+    "allowed_formula_ast_kinds": [
+      "metric_ref",
+      "const",
+      "ratio",
+      "sum",
+      "difference",
+      "multiply"
+    ],
+    "validation_rules": [
+      "All metric refs in formula_ast must exist in metric registry.",
+      "Derived metric dependencies must match formula_ast refs.",
+      "Division by zero must return null and emit warning.",
+      "Planner may reference only registered metric IDs."
+    ]
+  },
+  "metric_operational_contract": {
+    "principle": "Every canonical metric needs operational trust metadata beyond semantic definition.",
+    "required_fields": [
+      "source_entity",
+      "owner",
+      "refresh_sla",
+      "freshness_check",
+      "quality_checks",
+      "null_handling",
+      "zero_handling",
+      "late_arrival_policy"
+    ],
+    "status": "required_before_production_execution"
+  },
+  "planning_examples": [
+    {
+      "user_request": "Which source dropped the most last month compared to the previous month?",
+      "planner_output_shape": {
+        "metric": "net_sales",
+        "dimensions": [
+          "source"
+        ],
+        "time_range": "last_month",
+        "comparison_window": "previous_month",
+        "operations": [
+          "breakdown",
+          "compare",
+          "rank"
+        ]
+      },
+      "important_note": "The planner dynamically composes approved operations. It does not invent a new metric."
+    },
+    {
+      "user_request": "Show average check trend by day for this week.",
+      "planner_output_shape": {
+        "metric": "average_check",
+        "dimensions": [
+          "day"
+        ],
+        "time_range": "current_week",
+        "operations": [
+          "timeseries",
+          "trend"
+        ]
+      },
+      "important_note": "Trend analysis is dynamic, but the metric definition remains stable."
+    }
+  ],
+  "permission_model_blueprint": {
+    "principle": "Permissions should be defined by role plus scope plus capabilities, not by free-form user language.",
+    "runtime_enforcement_status": {
+      "implemented_now": [
+        "allowed_metric_ids",
+        "allowed_dimension_ids",
+        "allowed_tool_operations"
+      ],
+      "future_runtime_required": [
+        "allowed_branch_ids",
+        "allowed_export_modes"
+      ]
+    },
+    "scope_fields": [
+      "allowed_branch_ids",
+      "allowed_metric_ids",
+      "allowed_dimension_ids",
+      "allowed_tool_operations",
+      "allowed_export_modes"
+    ],
+    "example_role_templates": [
+      {
+        "role": "full_access",
+        "allowed_branch_ids": [
+          "*"
+        ],
+        "allowed_metric_ids": [
+          "*"
+        ],
+        "allowed_dimension_ids": [
+          "*"
+        ],
+        "allowed_tool_operations": [
+          "*"
+        ],
+        "allowed_export_modes": [
+          "csv",
+          "xlsx",
+          "pdf"
+        ]
+      },
+      {
+        "role": "branch_manager",
+        "allowed_branch_ids": [
+          "assigned_branch_only"
+        ],
+        "allowed_metric_ids": [
+          "gross_sales",
+          "net_sales",
+          "order_count",
+          "delivery_order_count",
+          "dine_in_order_count",
+          "average_check",
+          "discount_amount",
+          "discount_share"
+        ],
+        "allowed_dimension_ids": [
+          "source",
+          "day",
+          "hour",
+          "weekday",
+          "category"
+        ],
+        "allowed_tool_operations": [
+          "fetch_total_metric",
+          "fetch_breakdown",
+          "fetch_timeseries",
+          "compute_scalar_metrics",
+          "attach_breakdown_share",
+          "top_k",
+          "bottom_k",
+          "moving_average",
+          "trend_slope"
+        ],
+        "allowed_export_modes": [
+          "csv",
+          "xlsx"
+        ]
+      },
+      {
+        "role": "limited_ops",
+        "allowed_branch_ids": [
+          "assigned_branch_only"
+        ],
+        "allowed_metric_ids": [
+          "net_sales",
+          "order_count",
+          "average_check"
+        ],
+        "allowed_dimension_ids": [
+          "day",
+          "source"
+        ],
+        "allowed_tool_operations": [
+          "fetch_total_metric",
+          "fetch_breakdown",
+          "fetch_timeseries"
+        ],
+        "allowed_export_modes": []
+      }
+    ]
+  },
+  "implementation_path": {
+    "phase_1": "Introduce canonical metric and dimension registries as versioned metadata.",
+    "phase_2": "Finalize metric consistency decisions (including average_check denominator and version migration notes).",
+    "phase_3": "Adopt two-layer operation vocabulary with explicit semantic-to-runtime mapping.",
+    "phase_4": "Map user language to canonical metric IDs, dimension IDs, and semantic operations.",
+    "phase_5": "Enforce planner outputs to approved metrics, dimensions, and mapped runtime operations only.",
+    "phase_6": "Use formula_ast for deterministic derived-metric execution; keep formula strings as documentation.",
+    "phase_7": "Add metric operational trust metadata: lineage, freshness, quality, and null/zero policies.",
+    "phase_8": "Enforce branch-scope and export permissions in runtime contracts.",
+    "phase_9": "Expose evidence payloads and execution traces for grounding and debugging."
+  },
+  "anti_patterns": [
+    "Inventing business metrics dynamically from user phrasing",
+    "Letting the model perform important business calculations in hidden reasoning",
+    "Creating a separate hardcoded tool for every question shape",
+    "Coupling permissions only to report IDs once dynamic routes exist",
+    "Treating dimensions as ungoverned free text",
+    "Using formula strings as executable truth without validated formula_ast",
+    "Keeping semantic and runtime operation vocabularies unaligned"
+  ],
+  "one_sentence_summary": "Do not create a huge list of question-specific metrics. Create a small, governed metric registry and let dynamic planning compose those metrics with approved dimensions and operations."
+}
